@@ -19,7 +19,7 @@ class VState(str, enum.Enum):
 
 
 class VoiceSession:
-    """Represents one active voice client connection (browser tab or Discord voice)."""
+    """Represents one active local voice client connection (browser tab)."""
 
     def __init__(self, session_id: str = "default") -> None:
         self.session_id = session_id

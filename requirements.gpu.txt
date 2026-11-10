@@ -37,7 +37,5 @@ dateparser
 regex
 tavily-python
 
-# Discord voice & bot integrations
-discord.py[voice]
-discord-ext-voice-recv
-davey>=0.2.0
+# Discord bot (text replies)
+discord.py

@@ -1,7 +1,7 @@
 # S.P.I.D.E.Y (ORBIT007)
 
 S.P.I.D.E.Y is a local AI assistant with Ollama chat, browser voice, and
-Discord voice integration.
+Discord integration.
 
 - **LLM:** Ollama `qwen3.5:4b`
 - **TTS:** Gradium Phonon `phonon-31m-en` through `ptts`, CPU-only, with Windows
@@ -51,7 +51,7 @@ SPIDEY_TTS_VOICE=Easton
 ```
 
 The voice service synthesizes 24 kHz mono float32 audio. Browser playback
-receives WAV audio, while Discord resamples it to 48 kHz stereo PCM.
+receives WAV audio.
 
 ## Tests
 

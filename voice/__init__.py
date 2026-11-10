@@ -1,7 +1,7 @@
 """Voice processing package for S.P.I.D.E.Y.
 
 Provides Phonon TTS synthesis, speech-to-text integration, audio streaming,
-WebSocket live conversations, and Discord voice support.
+and WebSocket live conversations.
 """
 
 from . import config, text_clean, sentences, session, tts

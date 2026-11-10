@@ -30,20 +30,6 @@ def _bool(name: str, default: bool = False) -> bool:
     return val in {"1", "true", "yes", "on"}
 
 
-def _parse_id_allowlist(name: str) -> set[int]:
-    raw_value = os.environ.get(name, "")
-    values: set[int] = set()
-    for item in raw_value.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            values.add(int(item))
-        except ValueError:
-            pass
-    return values
-
-
 # Directory paths
 PACKAGE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = PACKAGE_DIR.parent
@@ -90,10 +76,3 @@ VAD_TRAILING_SILENCE_MS = _int("VAD_TRAILING_SILENCE_MS", 700)
 VAD_MIN_SPEECH_MS = _int("VAD_MIN_SPEECH_MS", 250)
 LIVE_BARGE_IN_THRESHOLD = _float("LIVE_BARGE_IN_THRESHOLD", 1500.0)
 LIVE_BARGE_IN_MIN_SPEECH_MS = _int("LIVE_BARGE_IN_MIN_SPEECH_MS", 300)
-
-# Discord Voice Configuration
-DISCORD_VOICE_ALLOWED_USER_IDS = _parse_id_allowlist(
-    "DISCORD_VOICE_ALLOWED_USER_IDS"
-) or _parse_id_allowlist("AI_DISCORD_ALLOWED_USER_IDS")
-DISCORD_VOICE_MAX_CHARS = _int("DISCORD_VOICE_MAX_CHARS", 500)
-DISCORD_CALL_IDLE_TIMEOUT_SECONDS = _int("DISCORD_CALL_IDLE_TIMEOUT_SECONDS", 600)
