@@ -10,9 +10,24 @@ export class AudioQueue {
         this.onPlay = null;
     }
 
+    ensureContext() {
+        if (typeof window === 'undefined') return null;
+        if (!this.ctx) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtx) {
+                this.ctx = new AudioCtx();
+            }
+        }
+        if (this.ctx && this.ctx.state === 'suspended') {
+            this.ctx.resume().catch(() => {});
+        }
+        return this.ctx;
+    }
+
     async push(arrayBuffer, epoch) {
         if (epoch !== this.epoch) return; // Stale audio from a stopped turn
-        this.ctx ||= new (window.AudioContext || window.webkitAudioContext)();
+        this.ensureContext();
+        if (!this.ctx) return;
         if (this.ctx.state === 'suspended') {
             await this.ctx.resume().catch(() => {});
         }

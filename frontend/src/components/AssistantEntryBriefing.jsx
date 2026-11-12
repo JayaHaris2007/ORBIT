@@ -51,44 +51,22 @@ export function triggerAssistantPrompt(promptText) {
 }
 
 /**
- * Speaks text using browser SpeechSynthesis as a responsive local fallback.
+ * Speaks text using Spidey neural TTS, with resilient fallback.
  */
 function useBriefingSpeech(textToSpeak) {
     const [speaking, setSpeaking] = useState(false);
     const audioQueueRef = useRef(null);
     const abortControllerRef = useRef(null);
+    const isFetchingRef = useRef(false);
+    const activeUtteranceRef = useRef(null);
 
-    useEffect(() => {
+    if (!audioQueueRef.current && typeof window !== 'undefined') {
         const queue = new AudioQueue();
         audioQueueRef.current = queue;
-        queue.onPlay = () => setSpeaking(true);
-        queue.onIdle = () => setSpeaking(false);
-        return () => {
-            queue.stop();
-            audioQueueRef.current = null;
-        };
-    }, []);
-
-    const fallbackBrowserSpeech = useCallback((text) => {
-        if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-            setSpeaking(false);
-            return;
-        }
-        try {
-            window.speechSynthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.rate = 1.0;
-            utterance.pitch = 0.95;
-            utterance.onend = () => setSpeaking(false);
-            utterance.onerror = () => setSpeaking(false);
-            setSpeaking(true);
-            window.speechSynthesis.speak(utterance);
-        } catch {
-            setSpeaking(false);
-        }
-    }, []);
+    }
 
     const stopSpeech = useCallback(() => {
+        isFetchingRef.current = false;
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
             abortControllerRef.current = null;
@@ -104,7 +82,58 @@ function useBriefingSpeech(textToSpeak) {
                 // ignore
             }
         }
+        activeUtteranceRef.current = null;
         setSpeaking(false);
+    }, []);
+
+    // Listen for global audio stop events across the app
+    useEffect(() => {
+        const handleAudioStop = () => stopSpeech();
+        window.addEventListener('spidey:audio_stop', handleAudioStop);
+        return () => window.removeEventListener('spidey:audio_stop', handleAudioStop);
+    }, [stopSpeech]);
+
+    // Attach callbacks to the audio queue
+    useEffect(() => {
+        const queue = audioQueueRef.current;
+        if (!queue) return;
+        queue.onPlay = () => setSpeaking(true);
+        queue.onIdle = () => {
+            // Only set speaking to false if we're not waiting for subsequent sentences to be synthesized
+            if (!isFetchingRef.current) {
+                setSpeaking(false);
+            }
+        };
+        return () => {
+            queue.stop();
+        };
+    }, []);
+
+    const fallbackBrowserSpeech = useCallback((text) => {
+        if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+            setSpeaking(false);
+            return;
+        }
+        try {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            activeUtteranceRef.current = utterance;
+            utterance.rate = 1.0;
+            utterance.pitch = 0.95;
+            utterance.onend = () => {
+                activeUtteranceRef.current = null;
+                setSpeaking(false);
+            };
+            utterance.onerror = () => {
+                activeUtteranceRef.current = null;
+                setSpeaking(false);
+            };
+            setSpeaking(true);
+            window.speechSynthesis.speak(utterance);
+        } catch {
+            activeUtteranceRef.current = null;
+            setSpeaking(false);
+        }
     }, []);
 
     const toggleSpeech = useCallback(async () => {
@@ -114,48 +143,52 @@ function useBriefingSpeech(textToSpeak) {
         }
         if (!textToSpeak || !textToSpeak.trim()) return;
 
-        let engineReady = false;
-        try {
-            const settings = await fetchVoiceSettings();
-            if (settings && (settings.engine_ready || settings.available)) {
-                engineReady = true;
-            }
-        } catch {
-            engineReady = false;
-        }
+        // 1. Immediately notify any other running audio to stop
+        window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
 
-        if (!engineReady) {
-            fallbackBrowserSpeech(textToSpeak);
-            return;
+        const queue = audioQueueRef.current;
+        // 2. CRITICAL: Synchronously unlock Web Audio Context during this user click event
+        if (queue && typeof queue.ensureContext === 'function') {
+            queue.ensureContext();
         }
 
         const controller = new AbortController();
         abortControllerRef.current = controller;
-        const queue = audioQueueRef.current;
-        if (!queue) {
-            fallbackBrowserSpeech(textToSpeak);
-            return;
-        }
-        const currentEpoch = queue.epoch;
+        const currentEpoch = queue ? queue.epoch : 0;
+
+        isFetchingRef.current = true;
         setSpeaking(true);
 
-        try {
-            const sentences = splitSentencesClient(textToSpeak);
-            if (!sentences.length) {
-                setSpeaking(false);
-                return;
-            }
+        const sentences = splitSentencesClient(textToSpeak);
+        if (!sentences.length) {
+            isFetchingRef.current = false;
+            setSpeaking(false);
+            return;
+        }
 
+        let atLeastOneSuccess = false;
+        try {
             for (const sentence of sentences) {
-                if (controller.signal.aborted) break;
+                if (controller.signal.aborted || (queue && currentEpoch !== queue.epoch)) break;
                 const wavBuffer = await fetchTTSAudio(sentence, controller.signal);
-                if (controller.signal.aborted) break;
-                await queue.push(wavBuffer, currentEpoch);
+                if (controller.signal.aborted || (queue && currentEpoch !== queue.epoch)) break;
+                atLeastOneSuccess = true;
+                if (queue) {
+                    await queue.push(wavBuffer, currentEpoch);
+                }
             }
         } catch (err) {
             if (controller.signal.aborted) return;
-            console.warn('Neural TTS playback error, falling back to Web Speech:', err);
-            fallbackBrowserSpeech(textToSpeak);
+            console.warn('Neural TTS synthesis error:', err);
+            // Only try browser fallback if nothing succeeded playing yet
+            if (!atLeastOneSuccess) {
+                fallbackBrowserSpeech(textToSpeak);
+            }
+        } finally {
+            isFetchingRef.current = false;
+            if (queue && !queue.playing && queue.queue.length === 0) {
+                setSpeaking(false);
+            }
         }
     }, [speaking, textToSpeak, stopSpeech, fallbackBrowserSpeech]);
 
@@ -669,10 +702,25 @@ const AssistantEntryBriefing = ({
                                             <button
                                                 type="button"
                                                 onClick={toggleSpeech}
-                                                className="inline-flex items-center gap-2 rounded-xl border border-orange-400/30 bg-orange-500/10 px-3.5 py-2 text-xs font-semibold text-orange-200 hover:bg-orange-500/20"
+                                                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-semibold transition-all ${
+                                                    speaking
+                                                        ? 'border-orange-400 bg-orange-500/25 text-white shadow-[0_0_20px_rgba(255,106,26,0.35)]'
+                                                        : 'border-orange-400/30 bg-orange-500/10 text-orange-200 hover:border-orange-400/50 hover:bg-orange-500/20'
+                                                }`}
+                                                aria-label={speaking ? 'Stop voice greeting' : 'Listen to briefing greeting'}
                                             >
-                                                {speaking ? <VolumeX size={15} /> : <Volume2 size={15} />}
-                                                <span>{speaking ? 'Mute Briefing' : 'Listen to Briefing'}</span>
+                                                {speaking ? (
+                                                    <>
+                                                        <span className="flex h-2 w-2 rounded-full bg-orange-400 animate-ping" />
+                                                        <VolumeX size={15} className="text-orange-300" />
+                                                        <span>Mute Briefing</span>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <Volume2 size={15} className="text-orange-400" />
+                                                        <span>Listen to Briefing</span>
+                                                    </>
+                                                )}
                                             </button>
                                         </div>
                                     </div>
