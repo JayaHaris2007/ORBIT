@@ -61,8 +61,13 @@ const AssistantSidebar = () => {
     const submitPromptRef = useRef(null);
 
     const handleSpeechTranscript = useCallback((text) => {
-        if (text) submitPromptRef.current?.(text);
-    }, []);
+        // In "listen" (push-to-talk) mode the voice WS only transcribes;
+        // we must forward the transcript to the chat API ourselves.
+        // In "live" mode the voice WS already runs the full loop
+        // (STT → LLM → TTS), so submitting here would create a duplicate
+        // chat reply and a second TTS playback.
+        if (text && !liveOpen) submitPromptRef.current?.(text);
+    }, [liveOpen]);
 
     const voiceSession = useVoiceSession({
         onTranscript: handleSpeechTranscript,
@@ -288,7 +293,7 @@ const AssistantSidebar = () => {
                     }
                 }
             }
-            if (data.response && voice.speakEnabled) {
+            if (data.response && voice.speakEnabled && !liveOpen) {
                 voice.speak(data.response);
             }
             refreshChats();
