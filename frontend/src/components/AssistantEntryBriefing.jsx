@@ -29,6 +29,7 @@ import {
 } from '../services/voiceService';
 
 const ENTRY_DISMISSED_KEY = 'spidey_entry_briefing_seen_v1';
+const ENTRY_SPOKEN_KEY = 'spidey_entry_briefing_spoken_v1';
 
 const STEP_ICONS = {
     task: ListTodo,
@@ -136,18 +137,15 @@ function useBriefingSpeech(textToSpeak) {
         }
     }, []);
 
-    const toggleSpeech = useCallback(async () => {
-        if (speaking) {
-            stopSpeech();
-            return;
-        }
+    const startSpeech = useCallback(async () => {
+        if (speaking) return;
         if (!textToSpeak || !textToSpeak.trim()) return;
 
         // 1. Immediately notify any other running audio to stop
         window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
 
         const queue = audioQueueRef.current;
-        // 2. CRITICAL: Synchronously unlock Web Audio Context during this user click event
+        // 2. Synchronously unlock Web Audio Context if available
         if (queue && typeof queue.ensureContext === 'function') {
             queue.ensureContext();
         }
@@ -190,11 +188,19 @@ function useBriefingSpeech(textToSpeak) {
                 setSpeaking(false);
             }
         }
-    }, [speaking, textToSpeak, stopSpeech, fallbackBrowserSpeech]);
+    }, [speaking, textToSpeak, fallbackBrowserSpeech]);
+
+    const toggleSpeech = useCallback(async () => {
+        if (speaking) {
+            stopSpeech();
+        } else {
+            await startSpeech();
+        }
+    }, [speaking, stopSpeech, startSpeech]);
 
     useEffect(() => () => stopSpeech(), [stopSpeech]);
 
-    return { speaking, toggleSpeech, stopSpeech };
+    return { speaking, toggleSpeech, startSpeech, stopSpeech };
 }
 
 /**
@@ -294,7 +300,42 @@ const AssistantEntryBriefing = ({
         [tasks, habits, nextTopics, progress, now, userName]
     );
 
-    const { speaking, toggleSpeech, stopSpeech } = useBriefingSpeech(briefing.spokenSummary);
+    const { speaking, toggleSpeech, startSpeech, stopSpeech } = useBriefingSpeech(briefing.spokenSummary);
+
+    // Automatically trigger briefing audio greeting only on first entry
+    useEffect(() => {
+        if (!showEntryOverlay) return;
+        if (typeof window === 'undefined') return;
+        if (sessionStorage.getItem(ENTRY_SPOKEN_KEY) === '1') return;
+
+        let hasAttempted = false;
+
+        const attemptAutoPlay = () => {
+            if (hasAttempted) return;
+            hasAttempted = true;
+            sessionStorage.setItem(ENTRY_SPOKEN_KEY, '1');
+            startSpeech();
+        };
+
+        // 1. Attempt to auto-start after 300ms once 3D overlay animation settles
+        const timer = setTimeout(() => {
+            attemptAutoPlay();
+        }, 300);
+
+        // 2. Fallback for strict browser autoplay policies: unlock on first user gesture
+        const handleFirstInteraction = () => {
+            attemptAutoPlay();
+        };
+
+        window.addEventListener('pointerdown', handleFirstInteraction, { once: true, passive: true });
+        window.addEventListener('keydown', handleFirstInteraction, { once: true, passive: true });
+
+        return () => {
+            clearTimeout(timer);
+            window.removeEventListener('pointerdown', handleFirstInteraction);
+            window.removeEventListener('keydown', handleFirstInteraction);
+        };
+    }, [showEntryOverlay, startSpeech]);
 
     // Typewriter effect for the assistant's spoken summary
     useEffect(() => {
@@ -322,6 +363,7 @@ const AssistantEntryBriefing = ({
 
     const dismissOverlay = useCallback(() => {
         sessionStorage.setItem(ENTRY_DISMISSED_KEY, '1');
+        sessionStorage.setItem(ENTRY_SPOKEN_KEY, '1');
         stopSpeech();
         setShowEntryOverlay(false);
     }, [stopSpeech]);
