@@ -486,3 +486,148 @@ def test_batch_habit_completion_and_uncomplete(chat_id, temp_db):
     assert len(sleeping["completed_dates"]) == 0
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "mark habits completed",
+        "mark habits as completed",
+        "mark habits done",
+        "complete habits",
+        "completed habits",
+        "i have just completed all my habits",
+        "mark my all habits completed",
+        "mark all my habits completed",
+        "mark all habits completed",
+        "mark all habits done",
+        "all my habits are done",
+        "all my habits are completed",
+        "i completed all my habits",
+    ],
+)
+def test_conversational_all_habits_completion(chat_id, temp_db, phrase):
+    temp_db.create_habit("watering garder")
+    temp_db.create_habit("Sleeping")
+    temp_db.create_habit("exercise")
+    temp_db.create_habit("Database Fundamentals")
+
+    res = app._handle_local_command(phrase, chat_id)
+    assert res is not None
+    assert res[1] == "local-habit-manager"
+    assert "Checked off all 4 habits" in res[0]
+    assert all(len(h["completed_dates"]) == 1 for h in temp_db.list_habits())
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "mark habit Sleeping completed",
+        "mark my Sleeping habit done",
+        "i have completed my Sleeping habit",
+    ],
+)
+def test_conversational_single_habit_completion(chat_id, temp_db, phrase):
+    temp_db.create_habit("Sleeping")
+    res = app._handle_local_command(phrase, chat_id)
+    assert res is not None
+    assert res[1] == "local-habit-manager"
+    assert len(temp_db.list_habits()[0]["completed_dates"]) == 1
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "mark tasks completed",
+        "complete tasks",
+        "i have just completed all my tasks",
+        "mark my all tasks completed",
+        "mark all my tasks completed",
+        "all my tasks are done",
+    ],
+)
+def test_conversational_all_tasks_completion(chat_id, temp_db, phrase):
+    temp_db.create_task("Task 1")
+    temp_db.create_task("Task 2")
+    res = app._handle_local_command(phrase, chat_id)
+    assert res is not None
+    assert res[1] == "local-task-manager"
+    assert "Marked all 2 pending tasks completed" in res[0]
+    assert all(t["completed"] == 1 for t in temp_db.list_tasks(include_completed=True))
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "un mark all habits",
+        "unmark all habits",
+        "unmark my all habits",
+        "unmark all my habits",
+        "uncheck all habits",
+        "unmark habits",
+        "i mean un mark habits i am not completed",
+        "un mark habits i am not completed",
+        "i have not completed my habits",
+        "i am not completed habits",
+        "mark all habits as not completed",
+        "mark habits not completed",
+    ],
+)
+def test_tricky_all_habits_uncomplete(chat_id, temp_db, phrase):
+    temp_db.create_habit("watering garder")
+    temp_db.create_habit("Sleeping")
+    temp_db.create_habit("exercise")
+    temp_db.create_habit("Database Fundamentals")
+    app._handle_local_command("complete all habits", chat_id)
+    assert all(len(h["completed_dates"]) == 1 for h in temp_db.list_habits())
+
+    res = app._handle_local_command(phrase, chat_id)
+    assert res is not None
+    assert res[1] == "local-habit-manager"
+    assert "Unchecked all 4 habits" in res[0]
+    assert all(len(h["completed_dates"]) == 0 for h in temp_db.list_habits())
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "un mark all tasks",
+        "unmark all tasks",
+        "reopen all tasks",
+        "re open all my tasks",
+        "unmark tasks",
+        "mark all tasks not completed",
+        "i have not completed my tasks",
+    ],
+)
+def test_tricky_all_tasks_reopen(chat_id, temp_db, phrase):
+    temp_db.create_task("Task 1")
+    temp_db.create_task("Task 2")
+    app._handle_local_command("complete all tasks", chat_id)
+    assert all(t["completed"] == 1 for t in temp_db.list_tasks(include_completed=True))
+
+    res = app._handle_local_command(phrase, chat_id)
+    assert res is not None
+    assert res[1] == "local-task-manager"
+    assert "Reopened all 2 tasks" in res[0]
+    assert all(t["completed"] == 0 for t in temp_db.list_tasks(include_completed=True))
+
+
+def test_contextual_i_mean_all_followup(chat_id, temp_db):
+    temp_db.create_habit("watering garder")
+    temp_db.create_habit("Sleeping")
+    temp_db.create_habit("exercise")
+    app._handle_local_command("complete all habits", chat_id)
+
+    # Uncheck 1 habit first, then say "i mean all"
+    res1 = app._handle_local_command("uncheck habit Sleeping", chat_id)
+    assert res1 is not None
+    temp_db.add_message(chat_id, "user", "uncheck habit Sleeping")
+    temp_db.add_message(chat_id, "assistant", res1[0])
+
+    res2 = app._handle_local_command("i mean all", chat_id)
+    assert res2 is not None
+    assert res2[1] == "local-habit-manager"
+    assert all(len(h["completed_dates"]) == 0 for h in temp_db.list_habits())
+
+
+
+

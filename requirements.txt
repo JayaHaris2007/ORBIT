@@ -1,0 +1,37 @@
+# S.P.I.D.E.Y. Python Dependencies
+#
+# Install inside a virtual environment:
+#   python -m venv .venv
+#   .\.venv\Scripts\python.exe -m pip install --upgrade pip
+#   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# Web Server, Async Streaming & Scheduling
+fastapi
+uvicorn[standard]
+aiohttp
+pydantic
+python-dotenv
+apscheduler
+
+# Agent Tools, Fuzzy Matching, Date Parsing & Web Research
+rapidfuzz
+dateparser
+regex
+tavily-python
+
+# Voice Stack (Gradium Phonon CPU TTS + SpeechRecognition STT)
+ptts
+SpeechRecognition
+soundfile
+numpy
+
+# Semantic Memory Embeddings
+torch
+sentence-transformers
+
+# Discord Bot Integration
+discord.py
+
+# Testing
+pytest
+httpx

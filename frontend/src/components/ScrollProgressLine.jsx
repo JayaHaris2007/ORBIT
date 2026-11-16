@@ -50,33 +50,19 @@ const ScrollProgressLine = () => {
 
     return (
         <div
-            className={`fixed top-0 left-0 right-0 h-[3px] z-[99] pointer-events-none transition-opacity duration-300 ${
+            className={`fixed top-0 left-0 right-0 h-[2px] z-[99] pointer-events-none transition-opacity duration-200 ${
                 isScrollable ? 'opacity-100' : 'opacity-0'
             }`}
             aria-hidden="true"
         >
-            {/* Ambient track glow */}
-            <div className="absolute inset-0 bg-orange-500/10 backdrop-blur-[1px]" />
-
-            {/* Glowing active progress line */}
+            <div className="absolute inset-0 bg-[#F2EFE9]/10" />
             <div
-                className="h-full bg-gradient-to-r from-orange-600 via-orange-500 to-amber-300 shadow-[0_0_12px_rgba(255,106,26,0.9),0_0_24px_rgba(255,106,26,0.5)] origin-left will-change-transform"
+                className="h-full bg-[#D95D24] origin-left will-change-transform"
                 style={{
                     transform: `scaleX(${progress})`,
-                    transition: 'transform 80ms ease-out',
+                    transition: 'transform 80ms cubic-bezier(0.22, 1, 0.36, 1)',
                 }}
             />
-
-            {/* Glowing photon head at current scroll position */}
-            {progress > 0.01 && progress < 0.99 && (
-                <div
-                    className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-amber-200 blur-[0.5px] shadow-[0_0_8px_#ff6a1a,0_0_16px_#ff8c28] pointer-events-none"
-                    style={{
-                        left: `calc(${progress * 100}% - 6px)`,
-                        transition: 'left 80ms ease-out',
-                    }}
-                />
-            )}
         </div>
     );
 };

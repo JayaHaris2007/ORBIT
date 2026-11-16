@@ -167,5 +167,23 @@ class ConfirmationManager:
                 [{"type": "refresh", "sections": ["memories"]}],
             )
 
+        elif tool == "delete_learning_roadmap":
+            if target_id is not None:
+                from learning import progress
+                progress.delete_roadmap(int(target_id))
+            return (
+                f"Learning roadmap '{target_name}' has been deleted.",
+                [{"type": "refresh", "sections": ["learning"]}],
+            )
+
+        elif tool == "delete_learning_topic":
+            if target_id is not None:
+                from learning import progress
+                progress.delete_topic(int(target_id))
+            return (
+                f"Learning topic '{target_name}' has been deleted.",
+                [{"type": "refresh", "sections": ["learning"]}],
+            )
+
         return f"Completed {action.summary}.", []
 

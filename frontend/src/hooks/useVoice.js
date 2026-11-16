@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { emitBrainState } from '../context/SpideyBrainContext';
 import {
     fetchTTSAudio,
     fetchVoiceSettings,
@@ -27,8 +28,14 @@ export function useVoice() {
     useEffect(() => {
         if (!audioQueue) return;
         audioQueue.setCallbacks(
-            () => setIsSpeaking(true),
-            () => setIsSpeaking(false)
+            () => {
+                setIsSpeaking(true);
+                emitBrainState('speaking');
+            },
+            () => {
+                setIsSpeaking(false);
+                emitBrainState('idle');
+            }
         );
 
         const onExternalStop = () => {

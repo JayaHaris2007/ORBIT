@@ -5,35 +5,34 @@ import { habitService } from '../services/habitService';
 import { taskService } from '../services/taskService';
 import { learningService } from '../services/learningService';
 import { format } from 'date-fns';
-import { Zap, CheckCircle, Target, Focus, Trophy } from 'lucide-react';
+import { Focus } from 'lucide-react';
 import { motion } from 'framer-motion';
 import HabitCard from '../components/HabitCard';
 import TaskCard from '../components/TaskCard';
-import CircularProgress from '../components/CircularProgress';
 import AnimeQuote from '../components/AnimeQuote';
 import ConfirmationModal from '../components/ConfirmationModal';
-import HabitWidget from '../components/HabitWidget';
-import TodoWidget from '../components/TodoWidget';
-import LearningWidget from '../components/LearningWidget';
 import TaskEditor from '../components/TaskEditor';
-import AssistantEntryBriefing from '../components/AssistantEntryBriefing';
+import NeuralCoreDeck from '../components/three/NeuralCoreDeck';
+import { PlotterSectionHeader } from '../components/editorial/PlotterArtwork';
+
+const EASE_MECH = [0.22, 1, 0.36, 1];
 
 const STAGGER_CONTAINER = {
     hidden: { opacity: 0 },
     show: {
         opacity: 1,
         transition: {
-            staggerChildren: 0.08,
+            staggerChildren: 0.06,
         },
     },
 };
 
 const STAGGER_ITEM = {
-    hidden: { opacity: 0, y: 16 },
+    hidden: { opacity: 0, y: 10 },
     show: {
         opacity: 1,
         y: 0,
-        transition: { duration: 0.42, ease: [0.16, 1, 0.3, 1] },
+        transition: { duration: 0.28, ease: EASE_MECH },
     },
 };
 
@@ -47,16 +46,14 @@ const Dashboard = () => {
     const [editingTask, setEditingTask] = useState(null);
     const [focusMode, setFocusMode] = useState(false);
     const [loading, setLoading] = useState(true);
-
     const [userData, setUserData] = useState(null);
 
-    // Confirmation State
     const [deleteConfig, setDeleteConfig] = useState({
         isOpen: false,
         type: null, // 'habit' | 'task'
         id: null,
         title: '',
-        message: ''
+        message: '',
     });
 
     const loadDashboardData = useCallback(async () => {
@@ -86,24 +83,17 @@ const Dashboard = () => {
         }
     }, [currentUser, revision, loadDashboardData]);
 
-    // Derived Stats
     const today = format(new Date(), 'yyyy-MM-dd');
-
-    // Habits Stats
-    const todaysHabits = habits; // All habits are for today typically, daily goal style
-    const completedHabitsCount = habits.filter(h => h.completedDates?.includes(today)).length;
+    const todaysHabits = habits;
+    const completedHabitsCount = habits.filter((h) => h.completedDates?.includes(today)).length;
     const totalHabitsCount = habits.length;
-    // Tasks Stats
-    const pendingTasks = tasks.filter(t => !t.completed);
-    const completedTasks = tasks.filter(t => t.completed); // Just for stats if needed
+    const pendingTasks = tasks.filter((t) => !t.completed);
+    const completedTasks = tasks.filter((t) => t.completed);
 
-    // Focus Mode Filter: Show only incomplete habits and top 3 high priority pending tasks
-    const focusHabits = habits.filter(h => !h.completedDates?.includes(today));
-    const focusTasks = pendingTasks
-        .sort((a, b) => {
-            const bg = { high: 3, medium: 2, low: 1 };
-            return bg[b.priority] - bg[a.priority];
-        })
+    const focusHabits = habits.filter((h) => !h.completedDates?.includes(today));
+    const priorityRank = { high: 3, medium: 2, low: 1 };
+    const focusTasks = [...pendingTasks]
+        .sort((a, b) => (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0))
         .slice(0, 3);
 
     const handleToggleHabit = async (habit) => {
@@ -170,7 +160,13 @@ const Dashboard = () => {
         }
     };
 
-    if (loading) return <div className="p-10 text-center text-textMuted animate-pulse">Getting everything ready...</div>;
+    if (loading) {
+        return (
+            <div className="border border-[#F2EFE9]/15 bg-[#141414] p-10 text-center font-mono text-xs uppercase tracking-[0.2em] text-[#9C968E]">
+                Initializing workspace...
+            </div>
+        );
+    }
 
     return (
         <motion.div
@@ -179,215 +175,131 @@ const Dashboard = () => {
             animate="show"
             className="space-y-8 pb-20"
         >
-            <motion.header variants={STAGGER_ITEM} className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            {/* Editorial Title Row */}
+            <motion.header
+                variants={STAGGER_ITEM}
+                className="flex flex-col justify-between gap-4 border-b border-[#F2EFE9]/15 pb-5 md:flex-row md:items-end"
+            >
                 <div>
-                    <h1 className="text-3xl font-bold text-white tracking-widest uppercase glow-white">
-                        {focusMode ? 'Focus time' : 'Command Center'}
+                    <div className="flex items-center gap-2.5">
+                        <span className="h-2 w-2 bg-[#D95D24]" />
+                        <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[#9C968E]">
+                            {format(new Date(), 'EEEE · MMMM d, yyyy')}
+                        </span>
+                    </div>
+                    <h1 className="mt-2 text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9] md:text-4xl">
+                        {focusMode ? 'Focus Mode' : 'Command Center'}
                     </h1>
-                    <p className="text-textMuted text-sm font-mono tracking-wide mt-1">
-                        {focusMode ? 'Silence the noise.' : `${format(new Date(), 'EEEE, MMMM do')} · ${pendingTasks.length} ${pendingTasks.length === 1 ? 'task' : 'tasks'} remaining`}
-                    </p>
                 </div>
 
                 <button
+                    type="button"
                     onClick={() => setFocusMode(!focusMode)}
-                    className={`px-6 py-2 rounded-xl flex items-center space-x-2 transition-all border ${focusMode
-                        ? 'bg-white text-black border-white shadow-[0_0_15px_rgba(255,255,255,0.2)]'
-                        : 'bg-transparent border-white/10 text-textMuted hover:text-white hover:border-white/30'
-                        }`}
+                    className={`inline-flex items-center gap-2 border px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.16em] transition-colors ${
+                        focusMode
+                            ? 'border-[#D95D24] bg-[#D95D24] text-[#111111]'
+                            : 'border-[#F2EFE9]/20 bg-[#151515] text-[#F2EFE9] hover:border-[#D95D24] hover:text-[#D95D24]'
+                    }`}
                 >
-                    <Focus size={18} />
-                    <span className="uppercase text-xs font-bold tracking-wider">{focusMode ? 'Back to dashboard' : 'Focus time'}</span>
+                    <Focus size={14} />
+                    <span>{focusMode ? 'Exit Focus' : 'Focus Mode'}</span>
                 </button>
             </motion.header>
 
-            {/* S.P.I.D.E.Y. Time-Based Entry Greeting, Remaining Workload & Where-To-Start Command Deck */}
+            {/* Merged S.P.I.D.E.Y. Neural Matrix + Personal Telemetry */}
             <motion.div variants={STAGGER_ITEM}>
-                <AssistantEntryBriefing
-                    tasks={tasks}
-                    habits={habits}
-                    nextTopics={nextTopics}
-                    progress={learningProgress}
+                <NeuralCoreDeck
                     userName={currentUser?.displayName || 'Shadow Hunter'}
+                    pendingTasksCount={pendingTasks.length}
+                    completedTasksCount={completedTasks.length}
+                    completedHabitsCount={completedHabitsCount}
+                    totalHabitsCount={totalHabitsCount}
+                    xp={userData?.xp || 0}
+                    streak={userData?.globalStreak || 0}
+                    topTask={focusTasks[0] || null}
+                    nextTopic={nextTopics[0] || null}
+                    learningProgress={learningProgress}
                     onQuickCompleteTask={(taskId) => handleToggleTask(taskId, true)}
-                    onQuickToggleHabit={handleToggleHabit}
                     onQuickStartTopic={handleQuickStartTopic}
                 />
             </motion.div>
 
-            {!focusMode && (
-                <motion.div variants={STAGGER_ITEM}>
-                    <AnimeQuote />
-                </motion.div>
-            )}
-
-            {!focusMode && (
-                <motion.div variants={STAGGER_ITEM} className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-4 gap-6">
-                    {/* Progress Card */}
-                    <div className="glass-card flex flex-col items-center justify-center p-6 space-y-4 relative overflow-hidden">
-                        <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent pointer-events-none" />
-                        <h3 className="text-xs font-bold uppercase tracking-widest text-textMuted self-start w-full mb-2">Today&apos;s progress</h3>
-                        <CircularProgress value={completedHabitsCount} max={totalHabitsCount || 1} />
-                        <div className="text-xs text-textMuted text-center font-mono tabular-nums">
-                            {completedHabitsCount} / {totalHabitsCount} habits completed
-                        </div>
-                    </div>
-
-                    {/* Quick Stats */}
-                    <div className="glass-card flex flex-col justify-between">
-                        <h3 className="text-xs font-bold uppercase tracking-widest text-textMuted mb-4">Overview</h3>
-                        <div className="space-y-3">
-                            <div className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded-full px-5 group hover:border-white/20 transition-colors">
-                                <div className="flex items-center space-x-3">
-                                    <div className="text-orange-400"><CheckCircle size={18} /></div>
-                                    <span className="text-text text-sm">Tasks Done</span>
-                                </div>
-                                <span className="font-bold text-lg text-white font-mono">{completedTasks.length}</span>
-                            </div>
-                            <div className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded-full px-5 group hover:border-white/20 transition-colors">
-                                <div className="flex items-center space-x-3">
-                                    <div className="text-textMuted group-hover:text-white transition-colors"><Target size={18} /></div>
-                                    <span className="text-text text-sm">Pending</span>
-                                </div>
-                                <span className="font-bold text-lg text-white font-mono">{pendingTasks.length}</span>
-                            </div>
-                            <div className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded-full px-5 group hover:border-white/20 transition-colors">
-                                <div className="flex items-center space-x-3">
-                                    <div className="text-orange-400"><Zap size={18} /></div>
-                                    <span className="text-text text-sm">Global streak</span>
-                                </div>
-                                <span className="font-bold text-lg text-white font-mono">
-                                    {userData?.globalStreak || 0}
-                                </span>
-                            </div>
-                            <div className="flex items-center justify-between p-3 bg-orange-500/10 border border-orange-400/15 rounded-full px-5">
-                                <span className="text-text text-sm">Level {Math.floor((userData?.xp || 0) / 100) + 1} · XP</span>
-                                <span className="font-bold text-lg text-orange-300 font-mono">{userData?.xp || 0}</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Next Priority Task */}
-                    <div className="glass-card relative overflow-hidden flex flex-col">
-                        <div className="absolute top-0 right-0 p-3 opacity-[0.03]">
-                            <Target size={120} />
-                        </div>
-                        <h3 className="text-xs font-bold uppercase tracking-widest text-textMuted mb-4">Top Priority</h3>
-                        {focusTasks.length > 0 ? (
-                            <div className="mt-2 flex-1 flex flex-col justify-between">
-                                <div>
-                                    <h4 className="text-lg font-bold text-white truncate">{focusTasks[0].title}</h4>
-                                    <p className="text-textMuted text-sm mt-1 line-clamp-2">{focusTasks[0].description || 'No description'}</p>
-                                </div>
-                                <div className="mt-4 flex justify-between items-center border-t border-white/5 pt-4">
-                                    <span className={`px-3 py-1 rounded-full text-[10px] uppercase font-bold tracking-wider bg-white/10 text-white border border-white/20`}>
-                                        {focusTasks[0].priority}
-                                    </span>
-                                    <span className="text-xs text-textMuted font-mono">
-                                        Due: {focusTasks[0].dueDate ? format(new Date(focusTasks[0].dueDate), 'MMM d') : 'N/A'}
-                                    </span>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="h-full flex items-center justify-center text-textMuted">
-                                <p className="font-mono text-xs">No pending tasks</p>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="glass-card relative overflow-hidden flex flex-col">
-                        <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-orange-500/10 blur-2xl" />
-                        <h3 className="relative text-xs font-bold uppercase tracking-widest text-textMuted mb-4 flex items-center gap-2"><Trophy size={15} className="text-orange-400" /> Growth</h3>
-                        <div className="relative flex items-end justify-between">
-                            <div><p className="text-3xl font-black text-white">LVL {Math.floor((userData?.xp || 0) / 100) + 1}</p><p className="mt-1 text-xs text-textMuted">{userData?.xp || 0} total XP</p></div>
-                            <span className="text-sm font-bold text-orange-300">{(userData?.xp || 0) % 100}<span className="text-textMuted"> / 100</span></span>
-                        </div>
-                        <div className="relative mt-4 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-orange-600 to-orange-300 transition-all" style={{ width: `${(userData?.xp || 0) % 100}%` }} /></div>
-                        <div className="relative mt-5 flex flex-wrap gap-2">
-                            {(userData?.achievements || []).length ? userData.achievements.map((achievement) => (
-                                <span key={achievement} className="rounded-full border border-orange-400/20 bg-orange-500/10 px-2.5 py-1 text-[10px] font-semibold text-orange-200">{achievement.replaceAll('-', ' ')}</span>
-                            )) : <span className="text-xs text-textMuted">Your first achievement is waiting.</span>}
-                        </div>
-                    </div>
-                </motion.div>
-            )}
-
-            {/* Phone Widgets Section - New */}
-            <motion.section variants={STAGGER_ITEM}>
-                <h2 className="text-lg font-bold flex items-center space-x-2 text-white/90 uppercase tracking-widest mb-4">
-                    <span>How you&apos;re doing</span>
-                </h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
-                    <HabitWidget habits={habits} onToggle={handleToggleHabit} />
-                    <TodoWidget
-                        tasks={tasks}
-                        onToggle={(id) => handleToggleTask(id, true)}
-                        onEdit={setEditingTask}
-                    />
-                    <LearningWidget />
-                </div>
-            </motion.section>
-
-            {/* Main Content Area */}
-            <motion.div variants={STAGGER_ITEM} className="grid grid-cols-1 items-start gap-8 md:grid-cols-2 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_320px]">
-
+            {/* Habits, Tasks & Task Editor Hairline Grid */}
+            <motion.div
+                variants={STAGGER_ITEM}
+                className="grid grid-cols-1 items-start gap-8 md:grid-cols-2 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_320px]"
+            >
                 {/* Habits Section */}
-                <section className="space-y-4">
-                    <h2 className="text-lg font-bold flex items-center space-x-2 text-white/90 uppercase tracking-widest">
-                        <Zap size={18} />
-                        <span>{focusMode ? 'Pending Habits' : 'Habits'}</span>
-                    </h2>
+                <section>
+                    <PlotterSectionHeader
+                        index="01"
+                        title={focusMode ? 'Pending Habits' : 'Daily Habits'}
+                        rightLabel={`${completedHabitsCount}/${totalHabitsCount}`}
+                    />
                     <div className="space-y-3">
-                        {(focusMode ? focusHabits : todaysHabits).map(habit => (
+                        {(focusMode ? focusHabits : todaysHabits).map((habit) => (
                             <HabitCard
                                 key={habit.id}
                                 habit={habit}
                                 onToggle={handleToggleHabit}
-                                onDelete={(id) => setDeleteConfig({
-                                    isOpen: true,
-                                    type: 'habit',
-                                    id,
-                                    title: 'Remove this habit?',
-                                    message: 'Remove this habit from your dashboard?'
-                                })}
+                                onDelete={(id) =>
+                                    setDeleteConfig({
+                                        isOpen: true,
+                                        type: 'habit',
+                                        id,
+                                        title: 'Remove this habit?',
+                                        message: 'Remove this habit from your dashboard?',
+                                    })
+                                }
                             />
                         ))}
                         {(focusMode ? focusHabits : todaysHabits).length === 0 && (
-                            <p className="text-textMuted italic text-sm border-l-2 border-white/10 pl-4 py-2">You&apos;re all caught up with your habits.</p>
+                            <p className="border-l border-[#D95D24] py-2 pl-4 font-mono text-xs text-[#9C968E]">
+                                All daily habits complete.
+                            </p>
                         )}
                     </div>
                 </section>
 
                 {/* Tasks Section */}
-                <section className="space-y-4">
-                    <h2 className="text-lg font-bold flex items-center space-x-2 text-white/90 uppercase tracking-widest">
-                        <CheckCircle size={18} />
-                        <span>{focusMode ? 'What matters most' : 'Your tasks'}</span>
-                    </h2>
+                <section>
+                    <PlotterSectionHeader
+                        index="02"
+                        title={focusMode ? 'Priority Queue' : 'Active Tasks'}
+                        rightLabel={`${pendingTasks.length} OPEN`}
+                    />
                     <div className="space-y-3">
-                        {(focusMode ? focusTasks : pendingTasks.slice(0, 5)).map(task => (
+                        {(focusMode ? focusTasks : pendingTasks.slice(0, 6)).map((task) => (
                             <TaskCard
                                 key={task.id}
                                 task={task}
                                 onToggle={handleToggleTask}
                                 onEdit={setEditingTask}
-                                onDelete={(id) => setDeleteConfig({
-                                    isOpen: true,
-                                    type: 'task',
-                                    id,
-                                    title: 'Abort Objective',
-                                    message: 'Remove this task from your mission log?'
-                                })}
+                                onDelete={(id) =>
+                                    setDeleteConfig({
+                                        isOpen: true,
+                                        type: 'task',
+                                        id,
+                                        title: 'Remove Task',
+                                        message: 'Remove this task from your active list?',
+                                    })
+                                }
                             />
                         ))}
                         {(focusMode ? focusTasks : pendingTasks).length === 0 && (
-                            <p className="text-textMuted italic text-sm border-l-2 border-white/10 pl-4 py-2">Log clear.</p>
+                            <p className="border-l border-[#D95D24] py-2 pl-4 font-mono text-xs text-[#9C968E]">
+                                No pending tasks.
+                            </p>
                         )}
                     </div>
                 </section>
 
-                {/* Task editor, docked on the right of the page */}
+                {/* Task Editor */}
                 <div className="2xl:sticky 2xl:top-6">
+                    <PlotterSectionHeader
+                        index="03"
+                        title={editingTask ? 'Edit Task' : 'New Entry'}
+                    />
                     <TaskEditor
                         task={editingTask}
                         onSave={handleSaveTask}
@@ -396,7 +308,13 @@ const Dashboard = () => {
                 </div>
             </motion.div>
 
-            {/* Confirmation Modal */}
+            {/* Minimal Print-Poster Quote Footer */}
+            {!focusMode && (
+                <motion.div variants={STAGGER_ITEM}>
+                    <AnimeQuote />
+                </motion.div>
+            )}
+
             <ConfirmationModal
                 isOpen={deleteConfig.isOpen}
                 onClose={() => setDeleteConfig({ ...deleteConfig, isOpen: false })}

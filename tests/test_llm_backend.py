@@ -55,7 +55,7 @@ def test_ollama_request_body_structure(monkeypatch, temp_db):
     # Options fields
     opts = payload["options"]
     assert opts["num_predict"] == 128
-    assert opts["num_ctx"] == 4096
+    assert opts["num_ctx"] == app.OLLAMA_NUM_CTX
     assert opts["temperature"] == 0
     assert opts["repeat_penalty"] == 1.05
 

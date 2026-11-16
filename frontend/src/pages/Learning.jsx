@@ -87,14 +87,20 @@ const Learning = () => {
 
     const handleDeleteRoadmap = async () => {
         if (!roadmapToDelete || busy) return;
+        const targetId = roadmapToDelete.id;
         setBusy(true);
         try {
-            await learningService.deleteRoadmap(roadmapToDelete.id);
+            await learningService.deleteRoadmap(targetId);
+        } catch (deleteError) {
+            if (!String(deleteError.message || '').toLowerCase().includes('not found')) {
+                setError(deleteError.message);
+            }
+        } finally {
+            if (selectedRoadmap?.id === targetId) {
+                setSelectedRoadmap(null);
+            }
             setRoadmapToDelete(null);
             await loadAll();
-        } catch (deleteError) {
-            setError(deleteError.message);
-        } finally {
             setBusy(false);
         }
     };
@@ -119,22 +125,25 @@ const Learning = () => {
 
     return (
         <div className="space-y-8 pb-20">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-                <div className="flex items-center gap-3">
-                    <h1 className="text-3xl font-bold text-white uppercase tracking-widest glow-white">
-                        Learning
-                    </h1>
-                    {learningService.isMock && (
-                        <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-1 rounded-full bg-white/5 border border-white/10 text-textMuted">
-                            mock mode
-                        </span>
-                    )}
+            <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#F2EFE9]/15 pb-5">
+                <div>
+                    <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">05 · Mastery</span>
+                    <div className="mt-1 flex items-center gap-3">
+                        <h1 className="text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9]">
+                            Learning
+                        </h1>
+                        {learningService.isMock && (
+                            <span className="border border-[#F2EFE9]/15 bg-[#151515] px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-[#9C968E]">
+                                mock mode
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <button
                     onClick={() => setIsCreateOpen(true)}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-500/90 text-white text-sm font-semibold hover:bg-orange-500 transition-colors shadow-[0_0_20px_rgba(255,106,26,0.25)]"
+                    className="flex items-center gap-2 border border-[#D95D24] bg-[#D95D24] px-4 py-2 font-mono text-xs font-bold uppercase tracking-[0.14em] text-[#111111] transition-colors hover:bg-[#C44E19]"
                 >
-                    <Plus size={16} /> New roadmap
+                    <Plus size={15} /> New roadmap
                 </button>
             </div>
 

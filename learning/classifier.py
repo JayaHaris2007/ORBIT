@@ -199,6 +199,8 @@ def _topic_embedding(
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
+    if len(a) != len(b) or not a:
+        return 0.0
     first = numpy.asarray(a, dtype=numpy.float32)
     second = numpy.asarray(b, dtype=numpy.float32)
     denominator = numpy.linalg.norm(first) * numpy.linalg.norm(second)

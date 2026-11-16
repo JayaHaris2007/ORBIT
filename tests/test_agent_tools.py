@@ -77,7 +77,7 @@ def tool_context(temp_store):
 # --- Schema and Validation Tests ---
 
 def test_tool_count_and_descriptions():
-    assert len(TOOLS) == 18
+    assert len(TOOLS) == 26
     for t in TOOLS:
         words = t.description.split()
         assert len(words) <= 40, f"Description for {t.name} exceeds 40 words ({len(words)})"
@@ -280,3 +280,70 @@ def test_list_tasks_capped_at_15(tool_context):
     res = validate_and_execute_tool("list_tasks", {"status": "all"}, tool_context)
     assert res["status"] == "ok"
     assert len(res["tasks"]) == 15
+
+
+# --- New NLP Tools Tests ---
+
+def test_get_analytics_tool(tool_context):
+    tool_context.deps.memory_store.create_task("Analytics Task 1", priority="high")
+    tool_context.deps.memory_store.create_habit("Daily Pushups")
+    res = validate_and_execute_tool("get_analytics", {"period": "week", "category": "all"}, tool_context)
+    assert res["status"] == "ok"
+    assert "tasks" in res
+    assert "habits" in res
+    assert "gamification" in res
+    assert any(a.get("type") == "navigate" and a.get("page") == "analytics" for a in tool_context.ui_actions)
+
+
+def test_batch_update_tasks_reschedule_and_complete(tool_context):
+    t1 = tool_context.deps.memory_store.create_task("Overdue #1", due_at="2020-01-01T00:00:00Z")
+    t2 = tool_context.deps.memory_store.create_task("Normal Task")
+    
+    # Batch complete overdue
+    res = validate_and_execute_tool("batch_update_tasks", {"action": "complete", "filter": "overdue"}, tool_context)
+    assert res["status"] == "ok"
+    assert res["count"] >= 1
+    
+    # Verify task 1 is now completed
+    all_tasks = tool_context.deps.memory_store.list_tasks(include_completed=True)
+    t1_found = next(t for t in all_tasks if t["id"] == t1["id"])
+    assert t1_found["completed"] == 1
+
+
+def test_control_ui_tool(tool_context):
+    res = validate_and_execute_tool("control_ui", {
+        "action_type": "apply_filter",
+        "target": "tasks",
+        "value": "high",
+    }, tool_context)
+    assert res["status"] == "ok"
+    assert any(a.get("type") == "apply_filter" and a.get("target") == "tasks" for a in tool_context.ui_actions)
+
+
+def test_complete_and_uncomplete_all_habits_tool(tool_context):
+    tool_context.deps.memory_store.create_habit("Watering Garden")
+    tool_context.deps.memory_store.create_habit("Sleeping")
+
+    res_comp = validate_and_execute_tool("complete_habit", {"habit": "all", "completed": True}, tool_context)
+    assert res_comp["status"] == "ok"
+    assert res_comp["count"] == 2
+    assert all(len(h["completed_dates"]) == 1 for h in tool_context.deps.memory_store.list_habits())
+
+    res_uncomp = validate_and_execute_tool("complete_habit", {"habit": "all", "completed": False}, tool_context)
+    assert res_uncomp["status"] == "ok"
+    assert res_uncomp["count"] == 2
+    assert all(len(h["completed_dates"]) == 0 for h in tool_context.deps.memory_store.list_habits())
+
+
+def test_batch_reopen_tasks_tool(tool_context):
+    t1 = tool_context.deps.memory_store.create_task("Task A")
+    t2 = tool_context.deps.memory_store.create_task("Task B")
+    validate_and_execute_tool("update_task", {"task": "all", "completed": True}, tool_context)
+    assert all(t["completed"] == 1 for t in tool_context.deps.memory_store.list_tasks(include_completed=True))
+
+    res = validate_and_execute_tool("batch_update_tasks", {"action": "reopen", "filter": "all_completed"}, tool_context)
+    assert res["status"] == "ok"
+    assert res["count"] == 2
+    assert all(t["completed"] == 0 for t in tool_context.deps.memory_store.list_tasks(include_completed=True))
+
+

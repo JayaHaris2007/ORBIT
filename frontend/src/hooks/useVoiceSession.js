@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { emitBrainAudioLevel, emitBrainState } from '../context/SpideyBrainContext';
 import { API_BASE_URL } from '../services/api';
 import { AudioQueue, stopVoiceTurn } from '../services/voiceService';
 
@@ -7,7 +8,7 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
     const [transcript, setTranscript] = useState('');
     const [reply, setReply] = useState('');
     const [error, setError] = useState(null);
-    const [mode, setMode] = useState('listen'); // listen | live
+    const [mode, setMode] = useState('live');
     const [timing, setTiming] = useState({ speechEnd: 0, transcript: 0, firstSentence: 0, firstAudio: 0, total: 0 });
 
     const wsRef = useRef(null);
@@ -68,6 +69,8 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
         queueRef.current.stop();
         stopVoiceTurn().catch(() => {});
         setState('idle');
+        emitBrainAudioLevel(0);
+        emitBrainState('idle');
         setTranscript('');
     }, [cleanupAudioCapture]);
 
@@ -78,8 +81,16 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
         }
     }, []);
 
+    const updateChatId = useCallback((chatId) => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && chatId) {
+            try {
+                wsRef.current.send(JSON.stringify({ type: 'set_chat', chat_id: chatId }));
+            } catch { /* ignore */ }
+        }
+    }, []);
+
     const startSession = useCallback(
-        async (sessionMode = 'listen', chatId = null) => {
+        async (sessionMode = 'live', chatId = null) => {
             stopSession();
             setMode(sessionMode);
             setError(null);
@@ -123,11 +134,27 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                 ws.onopen = () => {
                     ws.send(JSON.stringify({ type: 'start', mode: sessionMode, chat_id: chatId }));
                     setState('listening');
+                    emitBrainState('listening');
                 };
 
                 workletNode.port.onmessage = (event) => {
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.send(event.data); // Binary PCM frame (100 ms)
+                    }
+                    if (event.data instanceof ArrayBuffer) {
+                        const samples = new Int16Array(event.data);
+                        if (samples.length) {
+                            let sumSq = 0;
+                            const step = Math.max(1, Math.floor(samples.length / 64));
+                            let count = 0;
+                            for (let i = 0; i < samples.length; i += step) {
+                                const norm = samples[i] / 32768;
+                                sumSq += norm * norm;
+                                count++;
+                            }
+                            const rms = Math.sqrt(sumSq / Math.max(1, count));
+                            emitBrainAudioLevel(Math.min(1, rms * 4.5));
+                        }
                     }
                 };
 
@@ -137,6 +164,7 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                             const data = JSON.parse(event.data);
                             if (data.type === 'state') {
                                 setState(data.value);
+                                emitBrainState(data.value);
                                 if (data.value === 'transcribing') {
                                     timingRef.current.speechEnd = performance.now();
                                 }
@@ -148,7 +176,7 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                             } else if (data.type === 'reply') {
                                 setReply(data.text);
                                 timingRef.current.firstSentence = performance.now();
-                                onReply?.(data.text);
+                                onReply?.(data.text, data);
                             } else if (data.type === 'audio') {
                                 nextExpectedAudioSeqRef.current = data;
                             } else if (data.type === 'error') {
@@ -181,11 +209,15 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                     setError('Voice WebSocket connection error. Please ensure the S.P.I.D.E.Y server is running.');
                     cleanupAudioCapture();
                     setState('idle');
+                    emitBrainAudioLevel(0);
+                    emitBrainState('idle');
                 };
 
                 ws.onclose = () => {
                     cleanupAudioCapture();
                     setState('idle');
+                    emitBrainAudioLevel(0);
+                    emitBrainState('idle');
                 };
             } catch (err) {
                 console.error('Failed to initialize mic/voice session:', err);
@@ -213,6 +245,7 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
         startSession,
         stopSession,
         interrupt,
+        updateChatId,
         isIdle: state === 'idle'
     };
 }

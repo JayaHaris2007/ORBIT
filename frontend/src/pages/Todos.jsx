@@ -33,11 +33,33 @@ const Todos = () => {
         });
     }, [currentUser, revision]);
 
+    useEffect(() => {
+        const handleUiAction = (event) => {
+            const action = event?.detail;
+            if (!action) return;
+            if (action.type === 'apply_filter' && (!action.target || action.target === 'tasks' || action.target === 'todos')) {
+                const val = String(action.value || '').toLowerCase().trim();
+                if (['all', 'pending', 'completed', 'high', 'medium', 'low'].includes(val)) {
+                    setFilter(val);
+                } else if (val) {
+                    setSearch(val);
+                }
+            } else if (action.type === 'open_modal' && action.value) {
+                const found = tasks.find((t) => String(t.id) === String(action.value) || t.title.toLowerCase().includes(String(action.value).toLowerCase()));
+                if (found) setEditingTask(found);
+            }
+        };
+        window.addEventListener('orbit:ui_action', handleUiAction);
+        return () => window.removeEventListener('orbit:ui_action', handleUiAction);
+    }, [tasks]);
+
     const filteredTasks = tasks.filter(task => {
         const matchesFilter =
             filter === 'all' ? true :
                 filter === 'completed' ? task.completed :
-                    !task.completed;
+                    filter === 'pending' ? !task.completed :
+                        ['high', 'medium', 'low'].includes(filter) ? (!task.completed && task.priority === filter) :
+                            !task.completed;
 
         const matchesSearch = task.title.toLowerCase().includes(search.toLowerCase());
 
@@ -90,17 +112,18 @@ const Todos = () => {
 
     return (
         <div className="pb-20">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            <div className="mb-8 flex flex-col items-start justify-between gap-4 border-b border-[#F2EFE9]/15 pb-5 md:flex-row md:items-end">
                 <div>
-                    <h1 className="text-3xl font-bold text-white uppercase tracking-widest glow-white">Your tasks</h1>
-                    <p className="text-textMuted text-xs font-mono mt-1">Keep the important things moving.</p>
+                    <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">03 · Execution</span>
+                    <h1 className="mt-1 text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9]">Your tasks</h1>
+                    <p className="mt-1 font-mono text-xs text-[#9C968E]">Keep the important things moving.</p>
                 </div>
 
                 <button
                     onClick={() => setEditingTask(null)}
-                    className="bg-white hover:bg-white/90 text-black px-4 py-2 rounded-lg font-bold shadow-[0_0_15px_rgba(255,255,255,0.3)] transition-all flex items-center space-x-2 uppercase tracking-wide text-sm"
+                    className="flex items-center gap-2 border border-[#D95D24] bg-[#D95D24] px-4 py-2 font-mono text-xs font-bold uppercase tracking-[0.14em] text-[#111111] transition-colors hover:bg-[#C44E19]"
                 >
-                    <Plus size={18} />
+                    <Plus size={16} />
                     <span>New task</span>
                 </button>
             </div>
@@ -120,8 +143,8 @@ const Todos = () => {
                             />
                         </div>
 
-                        <div className="flex bg-surfaceHighlight p-1 rounded-lg border border-white/5">
-                            {['all', 'pending', 'completed'].map((f) => (
+                        <div className="flex flex-wrap bg-surfaceHighlight p-1 rounded-lg border border-white/5">
+                            {['all', 'pending', 'completed', 'high'].map((f) => (
                                 <button
                                     key={f}
                                     onClick={() => setFilter(f)}
@@ -130,7 +153,7 @@ const Todos = () => {
                                         : 'text-textMuted hover:text-white'
                                         }`}
                                 >
-                                    {f}
+                                    {f === 'high' ? 'High Priority' : f}
                                 </button>
                             ))}
                         </div>

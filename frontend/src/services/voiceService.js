@@ -3,6 +3,8 @@ import { API_BASE_URL, apiRequest } from './api';
 export class AudioQueue {
     constructor() {
         this.ctx = null;
+        this.analyser = null;
+        this.freqData = null;
         this.queue = [];
         this.playing = null;
         this.epoch = 0;
@@ -16,12 +18,35 @@ export class AudioQueue {
             const AudioCtx = window.AudioContext || window.webkitAudioContext;
             if (AudioCtx) {
                 this.ctx = new AudioCtx();
+                try {
+                    this.analyser = this.ctx.createAnalyser();
+                    this.analyser.fftSize = 64;
+                    this.analyser.smoothingTimeConstant = 0.7;
+                    this.analyser.connect(this.ctx.destination);
+                    this.freqData = new Uint8Array(this.analyser.frequencyBinCount);
+                } catch {
+                    this.analyser = null;
+                }
             }
         }
         if (this.ctx && this.ctx.state === 'suspended') {
             this.ctx.resume().catch(() => {});
         }
         return this.ctx;
+    }
+
+    getOutputLevel() {
+        if (!this.playing || !this.analyser || !this.freqData) return 0;
+        try {
+            this.analyser.getByteFrequencyData(this.freqData);
+            let sum = 0;
+            for (let i = 0; i < this.freqData.length; i++) {
+                sum += this.freqData[i];
+            }
+            return Math.min(1, (sum / (this.freqData.length * 255)) * 2.2);
+        } catch {
+            return 0;
+        }
     }
 
     async push(arrayBuffer, epoch) {
@@ -50,7 +75,11 @@ export class AudioQueue {
         }
         const src = this.ctx.createBufferSource();
         src.buffer = buf;
-        src.connect(this.ctx.destination);
+        if (this.analyser) {
+            src.connect(this.analyser);
+        } else {
+            src.connect(this.ctx.destination);
+        }
         src.onended = () => this._next();
         this.playing = src;
         this.onPlay?.();

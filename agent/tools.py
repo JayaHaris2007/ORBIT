@@ -7,6 +7,7 @@ Schemas are strictly constrained (<40 words per description) to preserve token b
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
@@ -303,13 +304,34 @@ def _exec_list_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 def _exec_update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     task_ref = args.get("task")
     tasks = ctx.deps.memory_store.list_tasks(include_completed=True)
-    item, err = resolve_entity(task_ref, tasks, title_key="title", entity_name="task")
-    if err:
-        return err
-
     title = args.get("title")
     priority = args.get("priority")
     completed = args.get("completed")
+
+    if str(task_ref).strip().lower() in ("all", "all tasks", "all my tasks", "everything", "*") and (
+        completed is not None or priority is not None
+    ):
+        if not tasks:
+            return {"status": "ok", "message": "No tasks set up yet.", "tasks": [], "count": 0}
+        updated_list = []
+        for t in tasks:
+            u = ctx.deps.memory_store.update_task(
+                task_id=t["id"],
+                priority=str(priority).lower() if priority else None,
+                completed=bool(completed) if completed is not None else None,
+            )
+            updated_list.append({
+                "id": u["id"],
+                "title": u["title"],
+                "priority": u["priority"],
+                "completed": bool(u.get("completed")),
+            })
+        ctx.ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
+        return {"status": "ok", "tasks": updated_list, "count": len(updated_list)}
+
+    item, err = resolve_entity(task_ref, tasks, title_key="title", entity_name="task")
+    if err:
+        return err
 
     updated = ctx.deps.memory_store.update_task(
         task_id=item["id"],
@@ -389,13 +411,29 @@ def _exec_list_habits(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 def _exec_complete_habit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     habit_ref = args.get("habit")
     habits = ctx.deps.memory_store.list_habits()
-    item, err = resolve_entity(habit_ref, habits, title_key="name", entity_name="habit")
-    if err:
-        return err
-
     today = datetime.now(ctx.deps.local_timezone).date().isoformat()
     date_str = str(args.get("date", today))
     completed = bool(args.get("completed", True))
+
+    if str(habit_ref).strip().lower() in ("all", "all habits", "all my habits", "everything", "*"):
+        if not habits:
+            return {"status": "ok", "message": "No habits set up yet.", "habits": [], "count": 0}
+        updated_list = []
+        for h in habits:
+            u = ctx.deps.memory_store.set_habit_completion(h["id"], date_str, completed)
+            updated_list.append({
+                "id": u["id"],
+                "name": u["name"],
+                "streak": u.get("streak", 0),
+                "completed": completed,
+                "date": date_str,
+            })
+        ctx.ui_actions.append({"type": "refresh", "sections": ["habits", "gamification"]})
+        return {"status": "ok", "habits": updated_list, "count": len(updated_list)}
+
+    item, err = resolve_entity(habit_ref, habits, title_key="name", entity_name="habit")
+    if err:
+        return err
 
     updated = ctx.deps.memory_store.set_habit_completion(item["id"], date_str, completed)
     ctx.ui_actions.append({"type": "refresh", "sections": ["habits", "gamification"]})
@@ -436,15 +474,27 @@ def _exec_save_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not content:
         return {"status": "error", "message": "'content' is required."}
 
-    mem = ctx.deps.memory_store.add_memory(content)
-    ctx.ui_actions.append({"type": "refresh", "sections": ["memories"]})
-    return {
-        "status": "ok",
-        "memory": {
-            "id": mem["id"],
-            "content": mem["content"],
-        },
-    }
+    try:
+        mem = ctx.deps.memory_store.add_memory(content)
+        ctx.ui_actions.append({"type": "refresh", "sections": ["memories"]})
+        return {
+            "status": "ok",
+            "memory": {
+                "id": mem["id"],
+                "content": mem["content"],
+            },
+        }
+    except ValueError as exc:
+        if "already exists" in str(exc).lower():
+            # Treat idempotently as success rather than throwing error
+            existing = [m for m in ctx.deps.memory_store.list_memories() if m["content"].strip().lower() == content.lower()]
+            mem_id = existing[0]["id"] if existing else None
+            return {
+                "status": "ok",
+                "message": "Memory already saved.",
+                "memory": {"id": mem_id, "content": content},
+            }
+        return {"status": "error", "message": str(exc)}
 
 
 def _exec_search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -563,6 +613,451 @@ def _exec_navigate(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     return {"status": "ok", "page": page, "route": route}
 
 
+# 7. Learning and Analytics Management
+def _exec_create_learning_roadmap(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    name = str(args.get("name", "")).strip()
+    if not name:
+        return {"status": "error", "message": "'name' is required."}
+
+    category = str(args.get("category", "technical")).lower()
+    if category not in ("academic", "technical", "personal"):
+        category = "technical"
+
+    description = str(args.get("description", "")).strip()
+
+    if not ctx.deps.learning_schema_initialized():
+        return {"status": "error", "message": "Learning schema is not initialized."}
+
+    from learning import progress
+    try:
+        rm = progress.create_roadmap(name=name, category=category, description=description)
+        ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+        return {
+            "status": "ok",
+            "roadmap": {
+                "id": rm["id"],
+                "name": rm["name"],
+                "category": rm["category"],
+            },
+        }
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+def _parse_iso_dt(raw: Any, default_tz: Any) -> datetime | None:
+    """Parse an ISO timestamp string into a timezone-aware datetime."""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=default_tz)
+        return dt.astimezone(default_tz)
+    except Exception:
+        return None
+
+
+_ACRONYMS = {"sql", "dbms", "ai", "ml", "dl", "nlp", "ui", "ux", "dsa", "oop", "api", "rest", "css", "html", "js", "ts", "aws", "gcp", "ci", "cd", "jwt", "llm", "rag", "os", "cn"}
+
+
+def _clean_roadmap_title(raw_topic: str) -> str:
+    """Infer a clean subject roadmap title without mangling acronyms."""
+    cleaned = re.sub(
+        r"^(?:intro(?:duction)?\s+to|basics?\s+of|fundamentals?\s+of|getting\s+started\s+with|learn(?:ing)?)\s+",
+        "",
+        raw_topic.strip(),
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\s+(?:basics?|fundamentals?|advanced|intro(?:duction)?|course|tutorial|guide|roadmap|essentials?)$",
+        "",
+        cleaned.strip(),
+        flags=re.IGNORECASE,
+    ).strip(" -_:")
+    if not cleaned:
+        cleaned = raw_topic.strip()
+    words = []
+    for w in cleaned.split():
+        low = w.lower().strip(".,()")
+        if low in _ACRONYMS:
+            words.append(w.upper())
+        elif w.isupper() and len(w) > 1:
+            words.append(w)
+        else:
+            words.append(w.capitalize())
+    return " ".join(words)
+
+
+def _exec_create_learning_Topic_or_match(name: str, summaries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Find best matching existing roadmap by roadmap name or existing topics inside it."""
+    from learning import schema
+    from rapidfuzz import fuzz
+
+    topic_lower = name.lower()
+    best_match = None
+    best_score = 0.0
+
+    for s in summaries:
+        s_name = s["name"].lower()
+        ratio = float(fuzz.partial_ratio(s_name, topic_lower))
+        if ratio > best_score:
+            best_score = ratio
+            best_match = s
+
+    if best_match and best_score >= 65.0:
+        return best_match
+
+    # Also check topics inside each roadmap for domain overlap
+    try:
+        with schema.connect() as conn:
+            topic_rows = conn.execute("SELECT roadmap_id, name FROM topics").fetchall()
+        by_rm: dict[int, list[str]] = {}
+        for r in topic_rows:
+            by_rm.setdefault(int(r["roadmap_id"]), []).append(str(r["name"]).lower())
+        for s in summaries:
+            rm_topics = by_rm.get(int(s["id"]), [])
+            for t_name in rm_topics:
+                score = float(fuzz.token_set_ratio(topic_lower, t_name))
+                if score >= 80.0 and score > best_score:
+                    best_score = score
+                    best_match = s
+    except Exception:
+        pass
+
+    return best_match if (best_match and best_score >= 75.0) else None
+
+
+def _exec_create_learning_topic(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    name = str(args.get("name", "")).strip()
+    if not name:
+        return {"status": "error", "message": "'name' is required."}
+
+    if not ctx.deps.learning_schema_initialized():
+        return {"status": "error", "message": "Learning schema is not initialized."}
+
+    from learning import progress
+    roadmap_name = args.get("roadmap")
+    roadmap_id = None
+    target_roadmap_name = None
+
+    summaries = progress.roadmap_summaries()
+
+    # 1. If explicit roadmap specified, find or create it
+    if roadmap_name:
+        rm = progress.find_roadmap(str(roadmap_name))
+        if rm:
+            roadmap_id = rm["id"]
+            target_roadmap_name = rm["name"]
+        else:
+            clean_rm = _clean_roadmap_title(str(roadmap_name))
+            existing_rm = next((s for s in summaries if s["name"].lower() == clean_rm.lower()), None)
+            if existing_rm:
+                roadmap_id = existing_rm["id"]
+                target_roadmap_name = existing_rm["name"]
+            else:
+                new_rm = progress.create_roadmap(clean_rm, category="technical")
+                roadmap_id = new_rm["id"]
+                target_roadmap_name = new_rm["name"]
+
+    # 2. If no roadmap specified, check if existing roadmaps or their topics match
+    if roadmap_id is None and summaries:
+        matched_rm = _exec_create_learning_Topic_or_match(name, summaries)
+        if matched_rm:
+            roadmap_id = matched_rm["id"]
+            target_roadmap_name = matched_rm["name"]
+
+    # 3. Otherwise, create a dedicated roadmap matching the topic domain
+    if roadmap_id is None:
+        clean_title = _clean_roadmap_title(name)
+        existing_rm = next((s for s in summaries if s["name"].lower() == clean_title.lower()), None)
+        if existing_rm:
+            roadmap_id = existing_rm["id"]
+            target_roadmap_name = existing_rm["name"]
+        else:
+            new_rm = progress.create_roadmap(clean_title, category="technical")
+            roadmap_id = new_rm["id"]
+            target_roadmap_name = new_rm["name"]
+
+    prio = int(args.get("priority", 2))
+    prio = max(1, min(3, prio))
+
+    try:
+        topic = progress.create_topic(
+            roadmap_id=roadmap_id,
+            name=name,
+            description=str(args.get("description", "")).strip(),
+            priority=prio,
+        )
+        ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+        return {
+            "status": "ok",
+            "topic": {
+                "id": topic["id"],
+                "name": topic["name"],
+                "roadmap_id": topic["roadmap_id"],
+                "roadmap_name": target_roadmap_name,
+                "priority": prio,
+                "status": topic["status"],
+            },
+        }
+    except ValueError as exc:
+        if "already exists" in str(exc).lower():
+            ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+            return {
+                "status": "ok",
+                "message": "Topic already exists in roadmap.",
+                "topic": {"name": name, "roadmap_id": roadmap_id, "roadmap_name": target_roadmap_name},
+            }
+        return {"status": "error", "message": str(exc)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+def _exec_complete_learning_topic(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    topic_ref = args.get("topic")
+    if not topic_ref:
+        return {"status": "error", "message": "'topic' is required."}
+
+    if not ctx.deps.learning_schema_initialized():
+        return {"status": "error", "message": "Learning schema is not initialized."}
+
+    from learning import progress, schema
+    with schema.connect() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT id, name, status, roadmap_id FROM topics").fetchall()]
+
+    item, err = resolve_entity(topic_ref, rows, title_key="name", entity_name="topic")
+    if err:
+        return err
+
+    if item.get("status") == "completed":
+        return {
+            "status": "ok",
+            "message": f"Topic '{item['name']}' is already marked completed.",
+            "topic": {"id": item["id"], "name": item["name"], "status": "completed", "xp_awarded": 0},
+        }
+
+    unmet = progress.unavailable_prerequisite_names(item["id"])
+    if unmet:
+        return {
+            "status": "error",
+            "message": f"Cannot complete '{item['name']}' yet — complete prerequisites first: {', '.join(unmet)}.",
+        }
+
+    try:
+        progress.set_topic_status(item["id"], "completed")
+        xp_awarded = 0
+        if hasattr(ctx.deps.memory_store, "award_xp"):
+            ctx.deps.memory_store.award_xp(25, reason=f"Completed learning topic: {item['name']}")
+            xp_awarded = 25
+
+        ctx.ui_actions.append({"type": "refresh", "sections": ["learning", "gamification"]})
+        return {
+            "status": "ok",
+            "topic": {
+                "id": item["id"],
+                "name": item["name"],
+                "status": "completed",
+                "xp_awarded": xp_awarded,
+            },
+        }
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+def _exec_delete_learning_roadmap(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    if ctx.has_called_web_search:
+        return {"status": "error", "message": "Destructive operations are forbidden in the same turn as web search."}
+
+    rm_ref = args.get("roadmap")
+    if not rm_ref:
+        return {"status": "error", "message": "'roadmap' is required."}
+
+    if not ctx.deps.learning_schema_initialized():
+        return {"status": "error", "message": "Learning schema is not initialized."}
+
+    from learning import progress
+    summaries = progress.roadmap_summaries()
+    item, err = resolve_entity(rm_ref, summaries, title_key="name", entity_name="roadmap")
+    if err:
+        return err
+
+    summary = f"Delete the learning roadmap '{item['name']}' and all its topics?"
+    return ctx.confirm_mgr.request_confirmation(
+        chat_id=ctx.chat_id,
+        tool_name="delete_learning_roadmap",
+        target=item,
+        summary=summary,
+    )
+
+
+def _exec_delete_learning_topic(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    if ctx.has_called_web_search:
+        return {"status": "error", "message": "Destructive operations are forbidden in the same turn as web search."}
+
+    topic_ref = args.get("topic")
+    if not topic_ref:
+        return {"status": "error", "message": "'topic' is required."}
+
+    if not ctx.deps.learning_schema_initialized():
+        return {"status": "error", "message": "Learning schema is not initialized."}
+
+    from learning import schema
+    with schema.connect() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT id, name, status, roadmap_id FROM topics").fetchall()]
+
+    item, err = resolve_entity(topic_ref, rows, title_key="name", entity_name="topic")
+    if err:
+        return err
+
+    summary = f"Delete the learning topic '{item['name']}'?"
+    return ctx.confirm_mgr.request_confirmation(
+        chat_id=ctx.chat_id,
+        tool_name="delete_learning_topic",
+        target=item,
+        summary=summary,
+    )
+
+
+def _exec_get_analytics(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    period = str(args.get("period", "week")).lower()
+    category = str(args.get("category", "all")).lower()
+
+    from datetime import timedelta
+    tz = ctx.deps.local_timezone
+    now = datetime.now(tz)
+    if period == "today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "month":
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:  # week
+        start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    result: dict[str, Any] = {"status": "ok", "period": period}
+
+    if category in ("tasks", "all"):
+        all_tasks = ctx.deps.memory_store.list_tasks(include_completed=True)
+        completed = [
+            t for t in all_tasks
+            if t.get("completed") and (_parse_iso_dt(t.get("completed_at"), tz) or start) >= start
+        ]
+        created = [
+            t for t in all_tasks
+            if (_parse_iso_dt(t.get("created_at"), tz) or start) >= start
+        ]
+        result["tasks"] = {
+            "completed": len(completed),
+            "created": len(created),
+            "pending": len([t for t in all_tasks if not t.get("completed")]),
+        }
+
+    if category in ("habits", "all"):
+        habits = ctx.deps.memory_store.list_habits()
+        today_str = now.date().isoformat()
+        done_today = sum(1 for h in habits if today_str in h.get("completed_dates", []))
+        result["habits"] = {
+            "total": len(habits),
+            "done_today": done_today,
+            "streaks": [{"name": h["name"], "streak": h.get("streak", 0)} for h in habits[:5]],
+        }
+
+    gamification = ctx.deps.memory_store.get_gamification()
+    result["gamification"] = {
+        "xp": gamification.get("xp", 0),
+        "global_streak": gamification.get("global_streak", 0),
+    }
+
+    ctx.ui_actions.append({"type": "navigate", "page": "analytics", "route": "/analytics"})
+    return result
+
+
+def _exec_batch_update_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    action = str(args.get("action", "")).lower()
+    filter_type = str(args.get("filter", "all_completed" if action in ("reopen", "uncomplete") else "all_pending")).lower()
+    new_due = args.get("new_due")
+
+    if action not in ("reschedule", "complete", "reopen", "uncomplete"):
+        return {"status": "error", "message": "Action must be 'reschedule', 'complete', 'reopen', or 'uncomplete'."}
+
+    include_completed = action in ("reopen", "uncomplete") or filter_type in ("all_completed", "all")
+    tasks = ctx.deps.memory_store.list_tasks(include_completed=include_completed)
+    tz = ctx.deps.local_timezone
+    now = datetime.now(tz)
+
+    if filter_type == "overdue":
+        targets = []
+        for t in tasks:
+            due_dt = _parse_iso_dt(t.get("due_at"), tz)
+            if due_dt is not None and due_dt < now and not t.get("completed"):
+                targets.append(t)
+    elif filter_type == "high_priority":
+        targets = [t for t in tasks if str(t.get("priority", "")).lower() == "high"]
+    elif filter_type == "all_completed":
+        targets = [t for t in tasks if bool(t.get("completed"))]
+    elif filter_type == "all_pending":
+        targets = [t for t in tasks if not bool(t.get("completed"))]
+    else:
+        targets = tasks
+
+    if not targets:
+        return {"status": "ok", "message": f"No tasks found matching filter '{filter_type}'.", "count": 0}
+
+    due_iso = None
+    if action == "reschedule":
+        if not new_due:
+            return {"status": "error", "message": "'new_due' is required when action is 'reschedule'."}
+        parsed = ctx.deps.parse_reminder_time(str(new_due))
+        if not parsed:
+            return {"status": "error", "message": f"Could not parse new due time '{new_due}'."}
+        due_iso = parsed.isoformat()
+
+    updated_count = 0
+    for t in targets:
+        if action == "reschedule":
+            ctx.deps.memory_store.update_task(t["id"], due_at=due_iso)
+            updated_count += 1
+        elif action == "complete":
+            ctx.deps.memory_store.update_task(t["id"], completed=True)
+            updated_count += 1
+        elif action in ("reopen", "uncomplete"):
+            ctx.deps.memory_store.update_task(t["id"], completed=False)
+            updated_count += 1
+
+    ctx.ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
+    return {
+        "status": "ok",
+        "action": action,
+        "filter": filter_type,
+        "count": updated_count,
+    }
+
+
+def _exec_control_ui(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    action_type = str(args.get("action_type", "")).strip().lower()
+    valid_actions = ("apply_filter", "highlight_item", "open_modal", "show_toast")
+    if action_type not in valid_actions:
+        return {"status": "error", "message": f"Action type must be one of: {', '.join(valid_actions)}."}
+
+    target = args.get("target")
+    value = args.get("value")
+    message = args.get("message")
+
+    payload: dict[str, Any] = {"type": action_type}
+    if target:
+        payload["target"] = target
+    if value is not None:
+        payload["value"] = value
+    if message:
+        payload["message"] = message
+
+    ctx.ui_actions.append(payload)
+    return {"status": "ok", "action": payload}
+
+
 # --- Tool Registry Definition ---
 
 TOOLS: list[ToolDefinition] = [
@@ -647,14 +1142,14 @@ TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="update_task",
-        description="Update a task's title, priority, or completion status.",
+        description="Update a task's title, priority, or completion status (pass task='all' to update all tasks).",
         parameters={
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "Task ID or title."},
+                "task": {"type": "string", "description": "Task ID, title, or 'all' for all tasks."},
                 "title": {"type": "string", "description": "New task title."},
                 "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "New priority."},
-                "completed": {"type": "boolean", "description": "Set task completed status."},
+                "completed": {"type": "boolean", "description": "Set task completed status (true for completed, false to reopen/unmark)."},
             },
             "required": ["task"],
         },
@@ -698,11 +1193,11 @@ TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="complete_habit",
-        description="Mark a habit completed or uncompleted for today or a specific date.",
+        description="Mark a habit (or 'all' for all habits) completed or uncompleted for today or a specific date.",
         parameters={
             "type": "object",
             "properties": {
-                "habit": {"type": "string", "description": "Habit ID or name."},
+                "habit": {"type": "string", "description": "Habit ID, name, or 'all' for all habits."},
                 "date": {"type": "string", "description": "Date in YYYY-MM-DD format (defaults to today)."},
                 "completed": {"type": "boolean", "description": "True to mark complete, false to unmark."},
             },
@@ -802,6 +1297,123 @@ TOOLS: list[ToolDefinition] = [
         },
         destructive=False,
         executor=_exec_navigate,
+    ),
+    # Learning & Progress Management
+    ToolDefinition(
+        name="create_learning_roadmap",
+        description="Create a new dedicated study roadmap (e.g. Machine Learning, Python).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Roadmap title."},
+                "category": {"type": "string", "enum": ["academic", "technical", "personal"], "description": "Roadmap category."},
+                "description": {"type": "string", "description": "Optional roadmap goal or description."},
+            },
+            "required": ["name"],
+        },
+        destructive=False,
+        executor=_exec_create_learning_roadmap,
+    ),
+    ToolDefinition(
+        name="create_learning_topic",
+        description="Add a new topic to study under a learning roadmap or as a new subject.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Topic name to learn."},
+                "roadmap": {"type": "string", "description": "Optional name or ID of roadmap."},
+                "description": {"type": "string", "description": "Optional description of topic."},
+                "priority": {"type": "integer", "description": "Priority: 1 (low), 2 (medium), or 3 (high)."},
+            },
+            "required": ["name"],
+        },
+        destructive=False,
+        executor=_exec_create_learning_topic,
+    ),
+    ToolDefinition(
+        name="complete_learning_topic",
+        description="Mark a learning topic as completed and earn XP.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Topic name or ID to mark completed."},
+            },
+            "required": ["topic"],
+        },
+        destructive=False,
+        executor=_exec_complete_learning_topic,
+    ),
+    ToolDefinition(
+        name="delete_learning_roadmap",
+        description="Delete a learning roadmap by ID or title (requires user confirmation).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "roadmap": {"type": "string", "description": "Roadmap ID or name to delete."},
+            },
+            "required": ["roadmap"],
+        },
+        destructive=True,
+        executor=_exec_delete_learning_roadmap,
+    ),
+    ToolDefinition(
+        name="delete_learning_topic",
+        description="Delete a learning topic by ID or name (requires user confirmation).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Topic ID or name to delete."},
+            },
+            "required": ["topic"],
+        },
+        destructive=True,
+        executor=_exec_delete_learning_topic,
+    ),
+    # Analytics & Batch Operations
+    ToolDefinition(
+        name="get_analytics",
+        description="Get productivity statistics and summaries across tasks and habits.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "period": {"type": "string", "enum": ["today", "week", "month"], "description": "Time window."},
+                "category": {"type": "string", "enum": ["tasks", "habits", "all"], "description": "Category to filter."},
+            },
+        },
+        destructive=False,
+        executor=_exec_get_analytics,
+    ),
+    ToolDefinition(
+        name="batch_update_tasks",
+        description="Batch reschedule, complete, or reopen/uncomplete multiple tasks matching a filter (overdue, high_priority, all_pending, all_completed, all).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["reschedule", "complete", "reopen", "uncomplete"], "description": "Batch operation."},
+                "filter": {"type": "string", "enum": ["overdue", "high_priority", "all_pending", "all_completed", "all"], "description": "Filter criteria."},
+                "new_due": {"type": "string", "description": "New due time if action is reschedule."},
+            },
+            "required": ["action"],
+        },
+        destructive=False,
+        executor=_exec_batch_update_tasks,
+    ),
+    # UI Control
+    ToolDefinition(
+        name="control_ui",
+        description="Trigger frontend UI interactions like filtering lists, highlighting elements, or showing toasts.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action_type": {"type": "string", "enum": ["apply_filter", "highlight_item", "open_modal", "show_toast"], "description": "UI action to invoke."},
+                "target": {"type": "string", "description": "Target UI section or element identifier."},
+                "value": {"type": "string", "description": "Value or parameter for the UI action."},
+                "message": {"type": "string", "description": "Notification message if showing toast."},
+            },
+            "required": ["action_type"],
+        },
+        destructive=False,
+        executor=_exec_control_ui,
     ),
 ]
 

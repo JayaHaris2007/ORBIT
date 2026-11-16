@@ -3,72 +3,79 @@ import { Check, Trash2, Calendar, AlertCircle, Pencil } from 'lucide-react';
 import { format } from 'date-fns';
 
 const priorityStyles = {
-    low: 'border-white/20 text-textMuted bg-white/5',
-    medium: 'border-white/40 text-text bg-white/10',
-    high: 'border-white text-white bg-white/20 shadow-[0_0_10px_rgba(255,255,255,0.1)]'
+    low: 'border-[#F2EFE9]/15 text-[#9C968E] bg-[#111111]',
+    medium: 'border-[#F2EFE9]/30 text-[#F2EFE9] bg-[#191816]',
+    high: 'border-[#D95D24] text-[#111111] bg-[#D95D24] font-bold',
 };
 
 const TaskCard = ({ task, onToggle, onDelete, onEdit }) => {
     return (
         <motion.div
             layout
-            initial={{ opacity: 0, x: -20 }}
+            initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 20 }}
-            className={`glass-card group flex items-start justify-between transition-opacity duration-300 ${task.completed ? 'opacity-40 grayscale' : ''
-                }`}
+            exit={{ opacity: 0, x: 8 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            className={`group flex items-start justify-between gap-3 border border-[#F2EFE9]/14 bg-[#151515] p-4 transition-colors hover:border-[#F2EFE9]/30 ${
+                task.completed ? 'opacity-45' : ''
+            }`}
         >
-            <div className="flex items-start space-x-4 w-full">
+            <div className="flex w-full items-start gap-3.5 min-w-0">
                 <button
+                    type="button"
                     onClick={() => onToggle(task.id, !task.completed)}
-                    className={`mt-1 w-6 h-6 rounded-full border flex items-center justify-center transition-all duration-300 ${task.completed
-                        ? 'bg-white border-white text-black'
-                        : 'bg-transparent border-textMuted hover:border-white'
-                        }`}
+                    className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center border transition-colors ${
+                        task.completed
+                            ? 'border-[#D95D24] bg-[#D95D24] text-[#111111]'
+                            : 'border-[#F2EFE9]/30 bg-transparent hover:border-[#D95D24]'
+                    }`}
+                    aria-label={`Toggle ${task.title}`}
                 >
-                    {task.completed && <Check size={14} strokeWidth={3} />}
+                    {task.completed && <Check size={12} strokeWidth={3} />}
                 </button>
 
-                <div className="flex-1">
-                    <h3 className={`font-semibold tracking-wide ${task.completed ? 'line-through text-textMuted' : 'text-white'}`}>
+                <div className="min-w-0 flex-1">
+                    <h3 className={`text-sm font-semibold tracking-wide ${task.completed ? 'line-through text-[#9C968E]' : 'text-[#F2EFE9]'}`}>
                         {task.title}
                     </h3>
                     {task.description && (
-                        <p className="text-sm text-textMuted mt-1">{task.description}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-[#9C968E]">{task.description}</p>
                     )}
 
-                    <div className="flex items-center space-x-3 mt-3 text-xs uppercase tracking-wider">
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em]">
                         {task.dueDate && (
-                            <span className="flex items-center text-textMuted bg-surfaceHighlight border border-white/5 px-3 py-1 rounded-full">
-                                <Calendar size={12} className="mr-1.5" />
+                            <span className="inline-flex items-center gap-1 border border-[#F2EFE9]/15 bg-[#111111] px-2 py-0.5 text-[#9C968E]">
+                                <Calendar size={10} />
                                 {format(new Date(task.dueDate), 'MMM d')}
                             </span>
                         )}
 
-                        <span className={`flex items-center px-3 py-1 rounded-full border ${priorityStyles[task.priority]}`}>
-                            <AlertCircle size={12} className="mr-1.5" />
+                        <span className={`inline-flex items-center gap-1 border px-2 py-0.5 ${priorityStyles[task.priority] || priorityStyles.low}`}>
+                            <AlertCircle size={10} />
                             {task.priority}
                         </span>
                     </div>
                 </div>
             </div>
 
-            <div className="flex items-center">
+            <div className="flex items-center shrink-0">
                 {onEdit && (
                     <button
+                        type="button"
                         onClick={() => onEdit(task)}
-                        className="text-textMuted hover:text-white opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity p-2"
+                        className="p-1.5 text-[#9C968E] opacity-100 transition-opacity hover:text-[#F2EFE9] md:opacity-0 md:group-hover:opacity-100"
                         aria-label={`Edit ${task.title}`}
                     >
-                        <Pencil size={16} />
+                        <Pencil size={14} />
                     </button>
                 )}
                 <button
+                    type="button"
                     onClick={() => onDelete(task.id)}
-                    className="text-textMuted hover:text-red-400 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity p-2"
+                    className="p-1.5 text-[#9C968E] opacity-100 transition-opacity hover:text-[#D95D24] md:opacity-0 md:group-hover:opacity-100"
                     aria-label={`Delete ${task.title}`}
                 >
-                    <Trash2 size={16} />
+                    <Trash2 size={14} />
                 </button>
             </div>
         </motion.div>

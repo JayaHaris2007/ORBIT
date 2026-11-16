@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { emitBrainAudioLevel, emitBrainPulse, emitBrainState } from '../context/SpideyBrainContext';
 
 const ORBIT_TOKEN = (import.meta.env.VITE_ORBIT_TOKEN || '').trim();
 const getAuthHeaders = (extra = {}) => ({
@@ -185,11 +186,41 @@ export function useOrbitAgent(activeChatIdProp) {
           } else if (data.type === 'chat_set') {
             if (data.history) setMessages(data.history);
           } else if (data.type === 'status') {
-            if (data.state === 'thinking') setIsLoading(true);
+            if (data.state === 'thinking') {
+              setIsLoading(true);
+              emitBrainState('thinking');
+            }
           } else if (data.type === 'pong') {
             // Keep-alive pong
           } else if (data.type === 'transcript') {
             setMessages((prev) => [...prev, { role: 'user', content: data.text }]);
+            emitBrainPulse(0.8);
+          } else if (data.type === 'token') {
+            if (data.text) {
+              emitBrainState('streaming');
+              emitBrainPulse(0.45);
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last && last.role === 'assistant' && last.streaming) {
+                  updated[updated.length - 1] = { ...last, content: last.content + data.text };
+                } else {
+                  updated.push({ role: 'assistant', content: data.text, streaming: true });
+                }
+                return updated;
+              });
+            }
+          } else if (data.type === 'stream_reset') {
+            setMessages((prev) => prev.filter((m, idx) => !(idx === prev.length - 1 && m.streaming)));
+          } else if (data.type === 'stream_done') {
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last && last.streaming) {
+                updated[updated.length - 1] = { ...last, streaming: false };
+              }
+              return updated;
+            });
           } else if (data.type === 'reminder_alert') {
             const currentCid = activeChatIdRef.current || 'default';
             // Only append in-chat reminder text when alert chat_id matches active chat
@@ -201,6 +232,7 @@ export function useOrbitAgent(activeChatIdProp) {
             window.dispatchEvent(new CustomEvent('orbit:reminder_alert', { detail: data }));
           } else if (data.type === 'agent_response') {
             setIsLoading(false);
+            emitBrainState('idle');
             if (data.history) {
               setMessages(data.history);
             } else if (data.text) {
@@ -210,18 +242,23 @@ export function useOrbitAgent(activeChatIdProp) {
             if (data.audio_url && isSpeakEnabled()) playAudio(data.audio_url);
             if (Array.isArray(data.ui_actions)) {
               for (const action of data.ui_actions) {
-                if (action && action.type === 'refresh') {
+                if (!action || !action.type) continue;
+                if (action.type === 'refresh') {
                   window.dispatchEvent(new CustomEvent('orbit:refresh', { detail: { sections: action.sections || [] } }));
-                } else if (action && action.type === 'navigate' && action.route) {
+                } else if (action.type === 'navigate') {
+                  const targetRoute = action.route || (action.page ? `/${action.page}` : null);
                   const allowed = ['/dashboard', '/habits', '/todos', '/reminders', '/learning', '/analytics', '/settings'];
-                  if (allowed.includes(action.route)) {
-                    window.dispatchEvent(new CustomEvent('orbit:navigate', { detail: { route: action.route, page: action.page } }));
+                  if (targetRoute && allowed.includes(targetRoute)) {
+                    window.dispatchEvent(new CustomEvent('orbit:navigate', { detail: { route: targetRoute, page: action.page } }));
                   }
+                } else {
+                  window.dispatchEvent(new CustomEvent('orbit:ui_action', { detail: action }));
                 }
               }
             }
           } else if (data.type === 'error') {
             setIsLoading(false);
+            emitBrainState('idle');
             console.error('Agent error:', data.error);
           }
         } catch (e) {
@@ -301,11 +338,26 @@ export function useOrbitAgent(activeChatIdProp) {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           wsRef.current.send(event.data);
         }
+        if (event.data instanceof ArrayBuffer) {
+          const samples = new Int16Array(event.data);
+          if (samples.length) {
+            let sumSq = 0;
+            const step = Math.max(1, Math.floor(samples.length / 64));
+            let count = 0;
+            for (let i = 0; i < samples.length; i += step) {
+              const norm = samples[i] / 32768;
+              sumSq += norm * norm;
+              count++;
+            }
+            emitBrainAudioLevel(Math.min(1, Math.sqrt(sumSq / Math.max(1, count)) * 4.5));
+          }
+        }
       };
 
       source.connect(workletNode);
       workletNode.connect(audioCtx.destination);
       setIsRecording(true);
+      emitBrainState('listening');
     } catch (err) {
       console.error('Microphone capture error:', err);
     }
@@ -326,6 +378,8 @@ export function useOrbitAgent(activeChatIdProp) {
       } catch { /* ignore */ }
     }
     setIsRecording(false);
+    emitBrainAudioLevel(0);
+    emitBrainState('idle');
   }, []);
 
   // Reminder CRUD helpers

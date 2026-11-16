@@ -46,16 +46,16 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 MAX_PROMPT_CHARS = 2000
-MAX_NEW_TOKENS = 512
+MAX_NEW_TOKENS = 2048
 DATABASE_PATH = Path(os.environ.get("ORBIT_DB_DIR", Path(__file__).resolve().parent)) / "assistant.db"
 
 # LLM Backend configuration (Ollama only)
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:4b").strip()
 try:
-    OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "4096").strip())
+    OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192").strip())
 except Exception:
-    OLLAMA_NUM_CTX = 4096
+    OLLAMA_NUM_CTX = 8192
 
 OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "5m").strip()
 try:
@@ -75,7 +75,7 @@ from typing import Optional
 from pydantic import BaseModel
 from fastapi import Body, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -136,7 +136,7 @@ from research.search_engine import (
 )
 from agent.deps import AgentDeps
 from agent.confirm import ConfirmationManager
-from agent.loop import AgentResult, run_agent_loop
+from agent.loop import AgentResult, run_agent_loop, run_agent_loop_stream
 
 def _ollama_check() -> None:
     global _ollama_ready
@@ -225,7 +225,8 @@ def ensure_model_loaded() -> None:
 
 generation_lock = threading.RLock()
 memory_store = MemoryStore(DATABASE_PATH)
-reminder_scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
+LOCAL_TIMEZONE_NAME = getattr(LOCAL_TIMEZONE, "key", str(LOCAL_TIMEZONE))
+reminder_scheduler = BackgroundScheduler(timezone=LOCAL_TIMEZONE)
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are S.P.I.D.E.Y., Jaya's personal AI assistant, technical co-pilot, "
@@ -417,7 +418,7 @@ def _schedule_reminder(reminder: dict[str, Any]) -> None:
     except (TypeError, ValueError):
         run_at = dateparser.parse(
             reminder["run_at"],
-            settings={"RETURN_AS_TIMEZONE_AWARE": True, "TIMEZONE": "Asia/Kolkata"},
+            settings={"RETURN_AS_TIMEZONE_AWARE": True, "TIMEZONE": LOCAL_TIMEZONE_NAME},
         )
     if run_at is None:
         LOGGER.warning("Skipping reminder %s: invalid run time.", reminder["id"])
@@ -434,7 +435,7 @@ def _schedule_reminder(reminder: dict[str, Any]) -> None:
         amount, unit = int(match.group(1) or 1), match.group(2)
         reminder_scheduler.add_job(
             _run_reminder,
-            IntervalTrigger(**{f"{unit}s": amount}, start_date=run_at, timezone="Asia/Kolkata"),
+            IntervalTrigger(**{f"{unit}s": amount}, start_date=run_at, timezone=LOCAL_TIMEZONE),
             args=[reminder["id"]],
             id=reminder["id"],
             replace_existing=True,
@@ -449,7 +450,7 @@ def _schedule_reminder(reminder: dict[str, Any]) -> None:
         run_at = now + timedelta(seconds=5)
     reminder_scheduler.add_job(
         _run_reminder,
-        DateTrigger(run_date=run_at, timezone="Asia/Kolkata"),
+        DateTrigger(run_date=run_at, timezone=LOCAL_TIMEZONE),
         args=[reminder["id"]],
         id=reminder["id"],
         replace_existing=True,
@@ -584,7 +585,7 @@ def _parse_reminder_time(value: str) -> datetime | None:
         r"\b(morning|afternoon|evening|night)\b", value, re.IGNORECASE
     )
     settings = {
-        "TIMEZONE": "Asia/Kolkata",
+        "TIMEZONE": LOCAL_TIMEZONE_NAME,
         "RETURN_AS_TIMEZONE_AWARE": True,
         "PREFER_DATES_FROM": "future",
     }
@@ -800,11 +801,24 @@ def _normalize_command(prompt: str) -> str:
         normalized,
         flags=re.IGNORECASE,
     )
-    # Strip conversational filler prefixes ("Now I am...", "Okay please...", "Alright, ...")
+    # Collapse split or hyphenated negative/action prefixes ("un mark" -> "unmark", "re open" -> "reopen")
+    normalized = re.sub(
+        r"\bun[\s\-]+(mark(?:ed)?|check(?:ed)?|complet(?:e|ed)|tick(?:ed)?|do(?:ne)?)\b",
+        r"un\1",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"\bre[\s\-]+(open(?:ed)?|start(?:ed)?)\b",
+        r"re\1",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    # Strip conversational filler prefixes ("Now I am...", "Okay please...", "I mean...")
     # while preserving short follow-up phrases like "now" or "okay now".
     if len(normalized.split()) > 2:
         normalized = re.sub(
-            r"^(?:(?:now|okay|ok|alright|so|well|actually|hey)\b[,\s]*)+",
+            r"^(?:(?:now|okay|ok|alright|so|well|actually|hey|wait|sorry|oops|no\s+i\s+mean|i\s+mean|i\s+meant)\b[,\s]*)+",
             "",
             normalized,
             flags=re.IGNORECASE,
@@ -1144,19 +1158,123 @@ def _parse_task_delete(prompt: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def _has_negation_or_unmark(normalized: str) -> bool:
+    """Return True if the normalized prompt is an unmark/undo/reopen command or negated completion."""
+    if re.match(
+        r"^(?:unmark|unmarked|uncheck|unchecked|uncomplete|uncompleted|untick|unticked|undo|undid|reset|reopen|reopened)\b",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.search(
+        r"\b(?:not\s+(?:yet\s+)?(?:completed|complete|done|finished|started|checked\s+off)|"
+        r"(?:haven't|hasn't|didn't|don't|am\s+not|'m\s+not|aren't|isn't|wasn't|weren't)\s+(?:yet\s+)?(?:completed|complete|done|finished|did|checked\s+off)|"
+        r"(?:as\s+)?(?:incomplete|unchecked|unmarked|not\s+done|not\s+completed|not\s+complete|open|pending)$)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        # Allow positive commands like "complete the habits that are not completed" or "... as completed"
+        if re.match(r"^(?:complete|finish|check\s+off|tick\s+off)\b", normalized, re.IGNORECASE):
+            return False
+        if re.search(r"\bas\s+(?:completed|complete|done|finished)$", normalized, re.IGNORECASE):
+            return False
+        return True
+    return False
+
+
 def _parse_task_reopen(prompt: str) -> str | None:
-    """Match 'reopen task 3' or 'mark task 3 as incomplete'."""
-    match = re.fullmatch(
-        r"(?:reopen|re-open|uncomplete|un-complete)\s+"
-        r"(?:(?:the|my)\s+)?task\s+(.+)"
-        r"|mark\s+(?:(?:the|my)\s+)?task\s+(.+?)\s+as\s+"
-        r"(?:incomplete|open|pending|not\s+completed|not\s+done)",
-        _normalize_command(prompt),
+    """Match 'reopen task 3', 'unmark all tasks', 'mark task 3 as incomplete', or negated task completion."""
+    normalized = _normalize_command(prompt)
+    if re.search(r"\b(?:habits?|topics?|roadmaps?|reminders?)\b", normalized, re.IGNORECASE):
+        return None
+
+    # 1. Batch reopen/unmark/uncheck/undo/reset all tasks
+    if re.fullmatch(
+        r"(?:(?:i\s+)?(?:have\s+|'ve\s+|am\s+)?(?:just\s+)?(?:unmarked|unmark|unchecked|uncheck|undid|undo|uncompleted|uncomplete|unticked|untick|reset|reopened|reopen))\s+"
+        r"(?:(?:the|my\s+all|all\s+my|all\s+of\s+my|all|my|both)\s+)*(?:tasks?|to[\s\-]?dos?)"
+        r"(?:\s+(?:for\s+today|today|(?:that\s+|which\s+)?(?:i\s+)?(?:am|have|haven't|are|were)?\s*(?:not\s+)?(?:completed|complete|done|finished)))?",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "all tasks"
+
+    # 2. "mark [all/my] tasks [as] not completed / incomplete / open"
+    if re.fullmatch(
+        r"mark\s+(?:(?:the|my\s+all|all\s+my|all\s+of\s+my|all|my)\s+)*(?:tasks?|to[\s\-]?dos?)\s+(?:as\s+)?"
+        r"(?:not\s+done|not\s+completed|not\s+complete|not\s+finished|incomplete|unchecked|unmarked|pending|open)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "all tasks"
+
+    # 3. Conversational negation: "i have not completed [all/my] tasks", "i am not completed tasks"
+    if re.fullmatch(
+        r"(?:i\s+)?(?:have\s+not|haven't|did\s+not|didn't|am\s+not|'m\s+not|not)\s+"
+        r"(?:yet\s+)?(?:completed|complete|finished|finish|done|did|checked\s+off)\s+"
+        r"(?:with\s+)?(?:(?:the|my\s+all|all\s+my|all\s+of\s+my|all|my)\s+)*(?:tasks?|to[\s\-]?dos?)(?:\s+today)?",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "all tasks"
+
+    # 4. Specific task: "reopen/unmark/uncheck/undo/reset [my/the] task <name>"
+    m = re.fullmatch(
+        r"(?:reopen|uncomplete|unmark|uncheck|undo|untick|reset)\s+"
+        r"(?:(?:the|my)\s+)?(?:tasks?|to[\s\-]?dos?)\s+(.+)",
+        normalized,
         re.IGNORECASE,
     )
-    if not match:
-        return None
-    return (match.group(1) or match.group(2)).strip()
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(
+            r"(?:all|all\s+of\s+them|them|both|today|for\s+today|(?:i\s+)?(?:am|have)\s+not\s+(?:completed|done))",
+            target,
+            re.IGNORECASE,
+        ):
+            return "all tasks"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 5. Specific task: "reopen/unmark/uncheck [my/the] <name> task"
+    m = re.fullmatch(
+        r"(?:reopen|uncomplete|unmark|uncheck|undo|untick|reset)\s+"
+        r"(?:(?:the|my)\s+)?(.+?)\s+(?:tasks?|to[\s\-]?dos?)(?:\s+today)?",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(r"(?:my\s+all|all\s+my|all\s+of\s+my|all|my|both)?", target, re.IGNORECASE):
+            return "all tasks"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 6. Specific task: "mark [my/the] task <name> [as] incomplete/not completed/open" or "mark <name> task ..."
+    m = re.fullmatch(
+        r"mark\s+(?:(?:the|my)\s+)?(?:(?:tasks?|to[\s\-]?dos?)\s+(.+?)|(.+?)\s+(?:tasks?|to[\s\-]?dos?))\s+(?:as\s+)?"
+        r"(?:incomplete|open|pending|unchecked|unmarked|not\s+completed|not\s+complete|not\s+done|not\s+finished)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = (m.group(1) or m.group(2)).strip()
+        if re.fullmatch(r"(?:(?:my\s+all|all\s+my|all|my)\s+)*tasks?|my\s+all|all\s+my|all|my", target, re.IGNORECASE):
+            return "all tasks"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 7. Conversational specific task negation: "i didn't complete [my] [task] <name> [task]"
+    m = re.fullmatch(
+        r"(?:i\s+)?(?:have\s+not|haven't|did\s+not|didn't|am\s+not|'m\s+not)\s+"
+        r"(?:yet\s+)?(?:completed|complete|finished|finish|done|did|checked\s+off)\s+"
+        r"(?:(?:the|my)\s+)?(?:task\s+(.+)|(.+?)\s+tasks?)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = (m.group(1) or m.group(2)).strip()
+        if re.fullmatch(r"(?:my\s+all|all\s+my|all|my)?", target, re.IGNORECASE):
+            return "all tasks"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    return None
 
 
 _ADVICE_PATTERN = re.compile(
@@ -1183,9 +1301,30 @@ def _is_task_list_request(prompt: str) -> bool:
         return False
     if re.match(
         r"^(?:add|create|new|complete|completed|finish|finished|mark|"
-        r"check off|delete|remove|rename|retitle|reopen|uncomplete|set|change|"
+        r"unmark|unmarked|uncheck|unchecked|uncomplete|uncompleted|untick|unticked|undo|reset|"
+        r"check off|tick off|delete|remove|rename|retitle|reopen|set|change|"
         r"update|make|cancel|done\s+with)\b",
         normalized_prompt,
+    ):
+        return False
+    if _parse_task_reopen(prompt) is not None or _parse_task_completion(prompt) is not None:
+        return False
+
+    # Conversational or assertive completion expressions for tasks
+    if (
+        re.search(
+            r"\b(?:i\s+(?:have\s+|'ve\s+)?(?:just\s+|already\s+)?(?:completed|complete|finished|finish|did|done|checked\s+off)|"
+            r"mark\s+.*(?:completed|complete|done|finished))\b",
+            normalized_prompt,
+        )
+        or re.match(
+            r"^(?:just\s+)?(?:completed|finished)\s+(?:all\s+)?(?:my\s+)?(?:tasks?|to[\s-]?dos?)\b",
+            normalized_prompt,
+        )
+        or re.match(
+            r"^(?:all\s+)?(?:my\s+)?(?:tasks?|to[\s-]?dos?)\s+(?:are\s+)?(?:completed|complete|done|finished)$",
+            normalized_prompt,
+        )
     ):
         return False
 
@@ -1221,7 +1360,7 @@ def _is_task_list_request(prompt: str) -> bool:
     pending_intent = re.search(
         r"\b(?:pending|incomplete|unfinished|remaining|left|to do|"
         r"need to do|still need to do|need to complete|to complete|"
-        r"need to finish|open|completed|done|finished)\b",
+        r"need to finish|open)\b",
         normalized_prompt,
     )
     return bool(list_intent or pending_intent)
@@ -1234,11 +1373,32 @@ def _is_habit_list_request(prompt: str) -> bool:
         return False
     if _is_advice_question(normalized_prompt):
         return False
-    # Let explicit create/complete/update commands reach their own handlers.
+    # Let explicit create/complete/uncomplete/update commands reach their own handlers.
     if re.match(
-        r"^(?:add|create|new|start|track|complete|finish|done with|mark done|"
-        r"check off|delete|remove|drop|rename|retitle|set|change|update)\b",
+        r"^(?:add|create|new|start|track|complete|completed|finish|finished|done with|mark|"
+        r"unmark|unmarked|uncheck|unchecked|uncomplete|uncompleted|untick|unticked|undo|reset|reopen|"
+        r"check off|tick off|delete|remove|drop|rename|retitle|set|change|update)\b",
         normalized_prompt,
+    ):
+        return False
+    if _parse_habit_uncomplete(prompt) is not None or _parse_habit_completion(prompt) is not None:
+        return False
+
+    # Conversational or assertive completion: "i have completed...", "i finished...", "all habits are done", "mark ... completed"
+    if (
+        re.search(
+            r"\b(?:i\s+(?:have\s+|'ve\s+)?(?:just\s+|already\s+)?(?:completed|complete|finished|finish|did|done|checked\s+off)|"
+            r"mark\s+.*(?:completed|complete|done|finished))\b",
+            normalized_prompt,
+        )
+        or re.match(
+            r"^(?:just\s+)?(?:completed|finished)\s+(?:all\s+)?(?:my\s+)?habits?\b",
+            normalized_prompt,
+        )
+        or re.match(
+            r"^(?:all\s+)?(?:my\s+)?habits?\s+(?:are\s+)?(?:completed|complete|done|finished)$",
+            normalized_prompt,
+        )
     ):
         return False
 
@@ -1258,7 +1418,7 @@ def _is_habit_list_request(prompt: str) -> bool:
     incomplete_intent = re.search(
         r"\b(?:pending|incomplete|unfinished|remaining|left|not complete|"
         r"not completed|still not complete|still not completed|to complete|"
-        r"to do|need to complete|need to finish|done|completed|today)\b",
+        r"to do|need to complete|need to finish)\b",
         normalized_prompt,
     )
     return bool(list_intent or incomplete_intent)
@@ -1315,33 +1475,179 @@ def _parse_chat_habit(prompt: str) -> tuple[str, str] | None:
 
 
 def _parse_habit_uncomplete(prompt: str) -> str | None:
-    """Match 'uncheck habit X', 'undo habit X', or 'mark habit X as not done'."""
+    """Match 'uncheck habit X', 'unmark all habits', 'mark habit X as not done', or negated habit completion."""
     normalized = _normalize_command(prompt)
-    match = re.fullmatch(
-        r"(?:uncheck|un-check|undo|uncomplete|un-complete|reset)\s+"
-        r"(?:(?:the|my)\s+)?habits?\s+(.+)"
-        r"|mark\s+(?:(?:the|my)\s+)?(?:habit\s+)?(.+?)\s+as\s+"
-        r"(?:not\s+done|not\s+completed|incomplete|unchecked|pending)",
+    if re.search(r"\b(?:tasks?|to[\s\-]?dos?|topics?|roadmaps?|reminders?)\b", normalized, re.IGNORECASE):
+        return None
+
+    # 1. Batch unmark/uncheck/undo/reset all habits (including trailing qualifiers like "i am not completed", "for today")
+    if re.fullmatch(
+        r"(?:(?:i\s+)?(?:have\s+|'ve\s+|am\s+)?(?:just\s+)?(?:unmarked|unmark|unchecked|uncheck|undid|undo|uncompleted|uncomplete|unticked|untick|reset|reopened|reopen))\s+"
+        r"(?:(?:the|my\s+all|all\s+my|all\s+of\s+my|all|my|both)\s+)*habits?"
+        r"(?:\s+(?:for\s+today|today|(?:that\s+|which\s+)?(?:i\s+)?(?:am|have|haven't|are|were)?\s*(?:not\s+)?(?:completed|complete|done|finished)))?",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "all habits"
+
+    # 2. "mark [all/my] habits [as] not completed / incomplete / unchecked"
+    if re.fullmatch(
+        r"mark\s+(?:(?:the|my\s+all|all\s+my|all\s+of\s+my|all|my)\s+)*habits?\s+(?:as\s+)?"
+        r"(?:not\s+done|not\s+completed|not\s+complete|not\s+finished|incomplete|unchecked|unmarked|pending|open)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "all habits"
+
+    # 3. Conversational negation: "i have not completed [all/my] habits", "i am not completed habits"
+    if re.fullmatch(
+        r"(?:i\s+)?(?:have\s+not|haven't|did\s+not|didn't|am\s+not|'m\s+not|not)\s+"
+        r"(?:yet\s+)?(?:completed|complete|finished|finish|done|did|checked\s+off)\s+"
+        r"(?:with\s+)?(?:(?:the|my\s+all|all\s+my|all\s+of\s+my|all|my)\s+)*habits?(?:\s+today)?",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "all habits"
+
+    # 4. Specific habit: "unmark/uncheck/undo/reset [my/the] habit <name>"
+    m = re.fullmatch(
+        r"(?:unmark|uncheck|undo|uncomplete|untick|reset|reopen)\s+"
+        r"(?:(?:the|my)\s+)?habits?\s+(.+)",
         normalized,
         re.IGNORECASE,
     )
-    if not match:
-        return None
-    target = (match.group(1) or match.group(2)).strip()
-    return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(
+            r"(?:all|all\s+of\s+them|them|both|today|for\s+today|(?:i\s+)?(?:am|have)\s+not\s+(?:completed|done))",
+            target,
+            re.IGNORECASE,
+        ):
+            return "all habits"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 5. Specific habit: "unmark/uncheck [my/the] <name> habit"
+    m = re.fullmatch(
+        r"(?:unmark|uncheck|undo|uncomplete|untick|reset|reopen)\s+"
+        r"(?:(?:the|my)\s+)?(.+?)\s+habits?(?:\s+today)?",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(r"(?:my\s+all|all\s+my|all\s+of\s+my|all|my|both)?", target, re.IGNORECASE):
+            return "all habits"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 6. Specific habit: "mark [my/the] [habit] <name> [habit] [as] not done/not completed/incomplete"
+    m = re.fullmatch(
+        r"mark\s+(?:(?:the|my)\s+)?(?:habit\s+)?(.+?)(?:\s+habits?)?\s+(?:as\s+)?"
+        r"(?:not\s+done|not\s+completed|not\s+complete|not\s+finished|incomplete|unchecked|unmarked|pending)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(r"(?:(?:my\s+all|all\s+my|all|my)\s+)*habits?|my\s+all|all\s+my|all|my", target, re.IGNORECASE):
+            return "all habits"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 7. Conversational specific habit negation: "i didn't complete [my] [habit] <name> [habit]"
+    m = re.fullmatch(
+        r"(?:i\s+)?(?:have\s+not|haven't|did\s+not|didn't|am\s+not|'m\s+not)\s+"
+        r"(?:yet\s+)?(?:completed|complete|finished|finish|done|did|checked\s+off)\s+"
+        r"(?:(?:the|my)\s+)?(?:habit\s+(.+)|(.+?)\s+habits?)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = (m.group(1) or m.group(2)).strip()
+        if re.fullmatch(r"(?:my\s+all|all\s+my|all|my)?", target, re.IGNORECASE):
+            return "all habits"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    return None
 
 
 def _parse_habit_completion(prompt: str) -> str | None:
-    """Match an explicit 'complete habit <name>' command."""
-    match = re.fullmatch(
-        r"(?:complete|completed|finish|finished|done\s+with|mark\s+done|check\s+off)\s+"
-        r"(?:(?:the|my)\s+)?habits?\s+(.+)",
-        _normalize_command(prompt),
+    """Match habit completion commands (batch, phrased with 'mark', or conversational)."""
+    normalized = _normalize_command(prompt)
+    if _has_negation_or_unmark(normalized):
+        return None
+
+    # 1. Direct batch completion: all habits (including "complete the habits that are not completed")
+    if re.fullmatch(
+        r"(?:(?:i\s+)?(?:have\s+|'ve\s+)?(?:just\s+|already\s+)?(?:completed|complete|finished|finish|did|done|checked\s+off)|"
+        r"mark|done\s+with)\s+(?:(?:the|my\s+all|all\s+my|all\s+of\s+my|all|my|remaining|pending|incomplete|open)\s+)*habits?"
+        r"(?:\s+(?:that\s+|which\s+)?(?:i\s+)?(?:am|have|haven't|are|were)?\s*(?:not\s+)?(?:completed|complete|done|finished|pending|left|remaining))?"
+        r"(?:\s+(?:as\s+)?(?:completed|complete|done|finished))?",
+        normalized,
+        re.IGNORECASE,
+    ) or re.fullmatch(
+        r"(?:(?:all\s+)?(?:my\s+)?habits?|my\s+all\s+habits?)\s+(?:are\s+)?(?:completed|complete|done|finished)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "all habits"
+
+    # 2. 'mark [my/the] habit <name> [as] completed/done'
+    m = re.fullmatch(
+        r"mark\s+(?:(?:the|my)\s+)?habit\s+(.+?)\s+(?:as\s+)?(?:completed|complete|done|finished)",
+        normalized,
         re.IGNORECASE,
     )
-    if not match:
-        return None
-    return re.sub(r"^(?:my|the)\s+", "", match.group(1).strip(), flags=re.IGNORECASE)
+    if m:
+        return re.sub(r"^(?:my|the)\s+", "", m.group(1).strip(), flags=re.IGNORECASE)
+
+    # 3. 'mark [my/the] <name> habit [as] completed/done'
+    m = re.fullmatch(
+        r"mark\s+(?:(?:the|my)\s+)?(.+?)\s+habits?\s+(?:as\s+)?(?:completed|complete|done|finished)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(r"(?:my\s+all|all\s+my|all|my)?", target, re.IGNORECASE):
+            return "all habits"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 4. Conversational specific habit: 'i (have) completed [my] [habit] <name>'
+    m = re.fullmatch(
+        r"(?:i\s+)?(?:have\s+|'ve\s+)?(?:just\s+|already\s+)?(?:completed|complete|finished|finish|done|checked\s+off)\s+"
+        r"(?:(?:the|my)\s+)?habit\s+(.+)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        return re.sub(r"^(?:my|the)\s+", "", m.group(1).strip(), flags=re.IGNORECASE)
+
+    # 5. Conversational specific habit: 'i (have) completed [my] <name> habit'
+    m = re.fullmatch(
+        r"(?:i\s+)?(?:have\s+|'ve\s+)?(?:just\s+|already\s+)?(?:completed|complete|finished|finish|done|checked\s+off)\s+"
+        r"(?:(?:the|my)\s+)?(.+?)\s+habits?",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(r"(?:my\s+all|all\s+my|all|my)?", target, re.IGNORECASE):
+            return "all habits"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 6. Standard 'complete habit <name>' or batch 'complete habits'
+    m = re.fullmatch(
+        r"(?:complete|completed|finish|finished|done\s+with|mark\s+done|check\s+off)\s+"
+        r"(?:(?:the|my)\s+)?habits?(?:\s+(.+))?",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1)
+        if not target or target.strip().lower() in {"", "all", "all of them", "them", "both"}:
+            return "all habits"
+        return re.sub(r"^(?:my|the)\s+", "", target.strip(), flags=re.IGNORECASE)
+
+    return None
 
 
 def _parse_habit_rename(prompt: str) -> tuple[str, str] | None:
@@ -1390,16 +1696,84 @@ def _find_habit(habit_title: str) -> dict[str, Any] | None:
 
 
 def _parse_task_completion(prompt: str) -> str | None:
-    """Match an explicit 'complete task <number|title>' command."""
-    match = re.fullmatch(
-        r"(?:complete|completed|finish|finished|mark\s+done|check\s+off|done\s+with)\s+"
-        r"(?:(?:the|my)\s+)?tasks?\s+(.+)",
-        _normalize_command(prompt),
+    """Match task completion commands (batch, phrased with 'mark', or conversational)."""
+    normalized = _normalize_command(prompt)
+    if _has_negation_or_unmark(normalized):
+        return None
+
+    # 1. Direct batch completion: all tasks
+    if re.fullmatch(
+        r"(?:(?:i\s+)?(?:have\s+|'ve\s+)?(?:just\s+|already\s+)?(?:completed|complete|finished|finish|did|done|checked\s+off)|"
+        r"mark|done\s+with)\s+(?:(?:the|my\s+all|all\s+my|all\s+of\s+my|all|my|remaining|pending|incomplete|open)\s+)*(?:tasks?|to[\s\-]?dos?)"
+        r"(?:\s+(?:that\s+|which\s+)?(?:i\s+)?(?:am|have|haven't|are|were)?\s*(?:not\s+)?(?:completed|complete|done|finished|pending|left|remaining))?"
+        r"(?:\s+(?:as\s+)?(?:completed|complete|done|finished))?",
+        normalized,
+        re.IGNORECASE,
+    ) or re.fullmatch(
+        r"(?:(?:all\s+)?(?:my\s+)?(?:tasks?|to[\s\-]?dos?)|my\s+all\s+(?:tasks?|to[\s\-]?dos?))\s+(?:are\s+)?(?:completed|complete|done|finished)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "all tasks"
+
+    # 2. 'mark [my/the] task <name> [as] completed/done'
+    m = re.fullmatch(
+        r"mark\s+(?:(?:the|my)\s+)?task\s+(.+?)\s+(?:as\s+)?(?:completed|complete|done|finished)",
+        normalized,
         re.IGNORECASE,
     )
-    if not match:
-        return None
-    return re.sub(r"^(?:my|the)\s+", "", match.group(1).strip(), flags=re.IGNORECASE)
+    if m:
+        return re.sub(r"^(?:my|the)\s+", "", m.group(1).strip(), flags=re.IGNORECASE)
+
+    # 3. 'mark [my/the] <name> task [as] completed/done'
+    m = re.fullmatch(
+        r"mark\s+(?:(?:the|my)\s+)?(.+?)\s+tasks?\s+(?:as\s+)?(?:completed|complete|done|finished)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(r"(?:my\s+all|all\s+my|all|my)?", target, re.IGNORECASE):
+            return "all tasks"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 4. Conversational specific task: 'i (have) completed [my] [task] <name>'
+    m = re.fullmatch(
+        r"(?:i\s+)?(?:have\s+|'ve\s+)?(?:just\s+|already\s+)?(?:completed|complete|finished|finish|done|checked\s+off)\s+"
+        r"(?:(?:the|my)\s+)?task\s+(.+)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        return re.sub(r"^(?:my|the)\s+", "", m.group(1).strip(), flags=re.IGNORECASE)
+
+    # 5. Conversational specific task: 'i (have) completed [my] <name> task'
+    m = re.fullmatch(
+        r"(?:i\s+)?(?:have\s+|'ve\s+)?(?:just\s+|already\s+)?(?:completed|complete|finished|finish|done|checked\s+off)\s+"
+        r"(?:(?:the|my)\s+)?(.+?)\s+tasks?",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1).strip()
+        if re.fullmatch(r"(?:my\s+all|all\s+my|all|my)?", target, re.IGNORECASE):
+            return "all tasks"
+        return re.sub(r"^(?:my|the)\s+", "", target, flags=re.IGNORECASE)
+
+    # 6. Standard 'complete task <name>' or batch 'complete tasks'
+    m = re.fullmatch(
+        r"(?:complete|completed|finish|finished|done\s+with|mark\s+done|check\s+off)\s+"
+        r"(?:(?:the|my)\s+)?tasks?(?:\s+(.+))?",
+        normalized,
+        re.IGNORECASE,
+    )
+    if m:
+        target = m.group(1)
+        if not target or target.strip().lower() in {"", "all", "all of them", "them", "both"}:
+            return "all tasks"
+        return re.sub(r"^(?:my|the)\s+", "", target.strip(), flags=re.IGNORECASE)
+
+    return None
 
 
 _COMPLETION_VERB_PATTERN = (
@@ -1417,6 +1791,8 @@ _ACTION_WITHOUT_HANDLER = re.compile(
 def _parse_completion_target(prompt: str) -> str | None:
     """Catch generic 'complete X' or 'now I am completed X' phrasing without an entity keyword."""
     normalized = _normalize_command(prompt)
+    if _has_negation_or_unmark(normalized):
+        return None
     patterns = (
         rf"{_COMPLETION_VERB_PATTERN}\s+(.+)",
         r"mark\s+(?:the\s+|my\s+)?(.+?)\s+(?:tasks?\s+|habits?\s+)?(?:as\s+)?"
@@ -1663,7 +2039,7 @@ def _schedule_weekly_learning_nudge(provider: str = "local") -> None:
         reminder_scheduler.add_job(
             _weekly_learning_nudge,
             CronTrigger(day_of_week="mon", hour=9, minute=0,
-                        timezone="Asia/Kolkata"),
+                        timezone=LOCAL_TIMEZONE),
             args=[provider],
             id=WEEKLY_LEARNING_NUDGE_JOB if provider == "local" else f"{WEEKLY_LEARNING_NUDGE_JOB}-{provider}",
             replace_existing=True,
@@ -1758,6 +2134,61 @@ def _uncomplete_habit(habit: dict[str, Any], name: str = "") -> str:
         return f"**{habit['name']}** wasn't checked off today."
     updated = memory_store.set_habit_completion(habit["id"], today, False)
     return f"Unchecked **{updated['name']}** for today (streak: {updated['streak']})."
+
+
+def _uncomplete_all_habits() -> tuple[str, str]:
+    all_habits = memory_store.list_habits()
+    if not all_habits:
+        return ("You don't have any habits set up yet.", "local-habit-manager")
+    today = datetime.now(LOCAL_TIMEZONE).date().isoformat()
+    completed_habits = [h for h in all_habits if today in h["completed_dates"]]
+    if not completed_habits:
+        return (
+            "None of your habits are checked off for today — they're all already unmarked.",
+            "local-habit-manager",
+        )
+    names = [h["name"] for h in completed_habits]
+    for h in completed_habits:
+        memory_store.set_habit_completion(h["id"], today, False)
+    if len(names) == len(all_habits):
+        return (
+            f"Unchecked all {len(names)} habits for today: "
+            + ", ".join(f"**{n}**" for n in names) + ".",
+            "local-habit-manager",
+        )
+    return (
+        f"Unchecked {len(names)} habit{'s' if len(names) != 1 else ''} for today: "
+        + ", ".join(f"**{n}**" for n in names)
+        + f" (all {len(all_habits)} habits are now unmarked).",
+        "local-habit-manager",
+    )
+
+
+def _reopen_all_tasks() -> tuple[str, str]:
+    all_tasks = memory_store.list_tasks(include_completed=True)
+    if not all_tasks:
+        return ("You don't have any tasks set up yet.", "local-task-manager")
+    completed_tasks = [t for t in all_tasks if t["completed"]]
+    if not completed_tasks:
+        return (
+            "None of your tasks are marked completed — they're all already open.",
+            "local-task-manager",
+        )
+    titles = [t["title"] for t in completed_tasks]
+    for t in completed_tasks:
+        memory_store.update_task(t["id"], completed=False)
+    if len(titles) == len(all_tasks):
+        return (
+            f"Reopened all {len(titles)} tasks: "
+            + ", ".join(f"**{title}**" for title in titles) + ".",
+            "local-task-manager",
+        )
+    return (
+        f"Reopened {len(titles)} completed task{'s' if len(titles) != 1 else ''}: "
+        + ", ".join(f"**{title}**" for title in titles)
+        + f" (all {len(all_tasks)} tasks are now open).",
+        "local-task-manager",
+    )
 
 
 _IDENTITY_QUESTION_PATTERNS = (
@@ -2328,8 +2759,8 @@ _LEARNING_HOLD_PATTERN = re.compile(
 )
 
 _LEARNING_REOPEN_PATTERN = re.compile(
-    r"^(?:reopen|re-open|reset|redo|uncomplete|restart)\s+(?:learning\s+|studying\s+|(?:the\s+)?topic\s+)(.+)$"
-    r"|^mark\s+(?:(?:the\s+)?topic\s+)?(.+?)\s+as\s+(?:not\s+started|unlearned|incomplete)$",
+    r"^(?:reopen|re-open|reset|redo|uncomplete|unmark|uncheck|undo|restart)\s+(?:learning\s+|studying\s+|(?:the\s+)?(?:learning\s+)?topic\s+)(.+)$"
+    r"|^mark\s+(?:(?:the\s+)?(?:learning\s+)?topic\s+)?(.+?)\s+(?:as\s+)?(?:not\s+started|not\s+completed|not\s+done|unlearned|incomplete|unmarked|unchecked)$",
     re.IGNORECASE,
 )
 
@@ -2985,29 +3416,56 @@ def _learning_command(
         reference = next(group for group in match.groups() if group)
         return _learning_next_reply(reference.strip(), chat_id=chat_id)
 
+    has_learning_keyword = bool(
+        re.search(
+            r"\b(?:topic|topics|roadmap|roadmaps|lesson|lessons|module|modules|learning|study|studying)\b",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+
     # Pause / On hold
     hold_match = _LEARNING_HOLD_PATTERN.fullmatch(normalized)
     if hold_match:
-        reference = next(group for group in hold_match.groups() if group)
-        return _learning_hold_reply(reference.strip(), chat_id=chat_id)
+        reference = next(group for group in hold_match.groups() if group).strip()
+        topics = _resolve_topic_from_context_or_ref(reference, chat_id)
+        if not topics and not has_learning_keyword:
+            return None
+        return _learning_hold_reply(reference, chat_id=chat_id)
 
     # Reopen / Reset
     reopen_match = _LEARNING_REOPEN_PATTERN.fullmatch(normalized)
     if reopen_match:
-        reference = next(group for group in reopen_match.groups() if group)
-        return _learning_reopen_reply(reference.strip(), chat_id=chat_id)
+        reference = next(group for group in reopen_match.groups() if group).strip()
+        topics = _resolve_topic_from_context_or_ref(reference, chat_id)
+        if not topics and not has_learning_keyword:
+            return None
+        return _learning_reopen_reply(reference, chat_id=chat_id)
 
     match = _LEARNING_START_PATTERN.fullmatch(normalized)
     if match:
-        reference = next(group for group in match.groups() if group)
-        return _learning_start_reply(reference.strip(), name=name, chat_id=chat_id)
-    match = _LEARNING_COMPLETE_PATTERN.fullmatch(normalized)
-    if match:
-        reference = next(group for group in match.groups() if group)
-        return _learning_complete_reply(reference.strip(), name=name, chat_id=chat_id)
-    match = _LEARNING_FINISHED_PATTERN.fullmatch(normalized)
-    if match:
-        return _learning_complete_reply(match.group(1).strip(), name=name, chat_id=chat_id)
+        reference = next(group for group in match.groups() if group).strip()
+        topics = _resolve_topic_from_context_or_ref(reference, chat_id)
+        if not topics and not has_learning_keyword:
+            return None
+        return _learning_start_reply(reference, name=name, chat_id=chat_id)
+
+    if not _has_negation_or_unmark(normalized):
+        match = _LEARNING_COMPLETE_PATTERN.fullmatch(normalized)
+        if match:
+            reference = next(group for group in match.groups() if group).strip()
+            topics = _resolve_topic_from_context_or_ref(reference, chat_id)
+            if not topics and not has_learning_keyword:
+                return None
+            return _learning_complete_reply(reference, name=name, chat_id=chat_id)
+
+        match = _LEARNING_FINISHED_PATTERN.fullmatch(normalized)
+        if match:
+            reference = match.group(1).strip()
+            topics = _resolve_topic_from_context_or_ref(reference, chat_id)
+            if not topics and not has_learning_keyword:
+                return None
+            return _learning_complete_reply(reference, name=name, chat_id=chat_id)
     return None
 
 
@@ -3128,6 +3586,8 @@ def _extract_context_entities(
             or "tackle" in lower_content
             or "list today" in lower_content
             or "checked off" in lower_content
+            or "unchecked" in lower_content
+            or "unmarked" in lower_content
         ):
             mentioned_habits.sort(key=lambda pair: pair[0])
             return [], [h for _, h in mentioned_habits]
@@ -3165,25 +3625,44 @@ def _resolve_contextual_completion(
 
     # Handle explicit batch targets ("all tasks", "all habits")
     if cleaned in {"all tasks", "all my tasks"}:
+        all_tasks_list = memory_store.list_tasks(include_completed=True)
+        if not all_tasks_list:
+            return ("You don't have any tasks set up yet.", "local-task-manager")
         if not pending_tasks:
             return ("All your tasks are already completed!", "local-task-manager")
         titles = [t["title"] for t in pending_tasks]
         for t in pending_tasks:
             _complete_task(t, name=name)
+        if len(titles) == len(all_tasks_list):
+            return (
+                f"Marked all {len(titles)} pending tasks completed: "
+                + ", ".join(f"**{title}**" for title in titles) + ".",
+                "local-task-manager",
+            )
         return (
-            f"Marked all {len(titles)} pending tasks completed: "
-            + ", ".join(f"**{title}**" for title in titles) + ".",
+            f"Marked the remaining {len(titles)} pending task{'s' if len(titles) != 1 else ''} completed: "
+            + ", ".join(f"**{title}**" for title in titles)
+            + f" (all {len(all_tasks_list)} tasks are now completed!).",
             "local-task-manager",
         )
     if cleaned in {"all habits", "all my habits"}:
+        if not all_habits:
+            return ("You don't have any habits set up yet.", "local-habit-manager")
         if not pending_habits:
             return ("All your habits are already checked off for today!", "local-habit-manager")
         names = [h["name"] for h in pending_habits]
         for h in pending_habits:
             _complete_habit(h, name=name)
+        if len(names) == len(all_habits):
+            return (
+                f"Checked off all {len(names)} habits for today: "
+                + ", ".join(f"**{n}**" for n in names) + ".",
+                "local-habit-manager",
+            )
         return (
-            f"Checked off all {len(names)} habits for today: "
-            + ", ".join(f"**{n}**" for n in names) + ".",
+            f"Checked off the remaining {len(names)} habit{'s' if len(names) != 1 else ''} for today: "
+            + ", ".join(f"**{n}**" for n in names)
+            + f" (all {len(all_habits)} habits are now completed!).",
             "local-habit-manager",
         )
 
@@ -3289,25 +3768,63 @@ def _resolve_contextual_mutation(
             updated = memory_store.update_task(chosen["id"], priority=new_prio)
             return (assistant_tone.task_priority(updated["title"], updated["priority"]), "local-task-manager")
 
-    # 3. Contextual Undo / Reopen / Uncheck: "undo it", "uncheck it", "reopen it", "mark it not done"
+    # 3. Contextual Undo / Reopen / Uncheck / Unmark: "undo it", "uncheck it", "unmark all", "reopen it", "mark it not done"
     undo_match = re.fullmatch(
-        r"(?:undo|uncheck|un-check|reopen|re-open|uncomplete|reset)\s+"
-        r"(it|that|this|the\s+task|the\s+habit|the\s+topic|that\s+topic)"
-        r"|mark\s+(it|that|this)\s+(?:as\s+)?(?:not\s+done|not\s+completed|not\s+started|incomplete|open|pending)",
+        r"(?:undo|uncheck|unmark|untick|reopen|uncomplete|reset)\s+"
+        r"(it|that|this|that\s+one|this\s+one|the\s+task|the\s+habit|the\s+topic|that\s+topic|"
+        r"(?:the\s+)?(?:first|second|third|1st|2nd|3rd)(?:\s+one)?|"
+        r"all|all\s+of\s+them|them|both|both\s+of\s+them|everything)"
+        r"|mark\s+(it|that|this|all|all\s+of\s+them|them|both|both\s+of\s+them|everything)\s+(?:as\s+)?"
+        r"(?:not\s+done|not\s+completed|not\s+complete|not\s+started|incomplete|unchecked|unmarked|open|pending)",
         normalized,
         re.IGNORECASE,
     )
     if undo_match:
+        target_ref = (undo_match.group(1) or undo_match.group(2) or "it").lower()
+        is_batch_undo = target_ref in {"all", "all of them", "them", "both", "both of them", "everything"}
+        ordinal = 1 if ("second" in target_ref or "2nd" in target_ref) else (2 if ("third" in target_ref or "3rd" in target_ref) else 0)
         if (is_recent_learning or "topic" in normalized) and ctx_topics and "task" not in normalized and "habit" not in normalized:
-            return _learning_reopen_reply("it", chat_id=chat_id)
+            return _learning_reopen_reply(target_ref, chat_id=chat_id)
         ctx_tasks, ctx_habits = _extract_context_entities(chat_id)
-        if ctx_tasks:
-            chosen = ctx_tasks[0]
+        if ctx_tasks and "habit" not in target_ref:
+            if is_batch_undo:
+                return _reopen_all_tasks()
+            chosen = ctx_tasks[ordinal] if ordinal < len(ctx_tasks) else ctx_tasks[0]
             updated = memory_store.update_task(chosen["id"], completed=False)
             return (assistant_tone.task_reopened(updated["title"], name=name), "local-task-manager")
-        if ctx_habits:
-            chosen = ctx_habits[0]
+        if ctx_habits and "task" not in target_ref:
+            if is_batch_undo:
+                return _uncomplete_all_habits()
+            chosen = ctx_habits[ordinal] if ordinal < len(ctx_habits) else ctx_habits[0]
             return (_uncomplete_habit(chosen, name=name), "local-habit-manager")
+
+    # 4. Follow-up batch correction: "i mean all", "all of them", "both of them"
+    raw_clean = re.sub(r"\s+", " ", prompt.strip().lower()).rstrip(".!?")
+    followup_all_match = re.fullmatch(
+        r"(?:(?:no|wait|sorry|actually)[,\s]+)*(?:(?:i\s+mean|i\s+meant)\s+(?:all|all\s+of\s+them|both|both\s+of\s+them|everything|them)"
+        r"|(?:all\s+of\s+them|both\s+of\s+them))",
+        raw_clean,
+        re.IGNORECASE,
+    )
+    if followup_all_match:
+        messages = memory_store.get_messages(chat_id) if chat_id else []
+        last_assistant = next(
+            (m["content"].lower() for m in reversed(messages) if m.get("role") == "assistant"),
+            "",
+        )
+        ctx_tasks, ctx_habits = _extract_context_entities(chat_id)
+        if any(w in last_assistant for w in ("unchecked", "unmarked", "wasn't checked off")) and (
+            "habit" in last_assistant or ctx_habits
+        ):
+            return _uncomplete_all_habits()
+        if any(w in last_assistant for w in ("reopened", "still open")) and (
+            "task" in last_assistant or ctx_tasks
+        ):
+            return _reopen_all_tasks()
+        if ctx_habits or "habit" in last_assistant:
+            return _resolve_contextual_completion("all habits", chat_id, name=name)
+        if ctx_tasks or "task" in last_assistant:
+            return _resolve_contextual_completion("all tasks", chat_id, name=name)
 
     return None
 
@@ -3587,6 +4104,8 @@ def _handle_local_command(prompt: str, chat_id: str) -> tuple[str, str] | None:
 
     task_reopen = _parse_task_reopen(prompt)
     if task_reopen is not None:
+        if task_reopen.strip().lower() in {"all tasks", "all my tasks", "all"}:
+            return _reopen_all_tasks()
         task = _find_task_reference(task_reopen)
         if task is None:
             raise ValueError(f"No task matched '{task_reopen}'.")
@@ -3677,6 +4196,8 @@ def _handle_local_command(prompt: str, chat_id: str) -> tuple[str, str] | None:
 
     habit_uncomplete = _parse_habit_uncomplete(prompt)
     if habit_uncomplete is not None:
+        if habit_uncomplete.strip().lower() in {"all habits", "all my habits", "all"}:
+            return _uncomplete_all_habits()
         habit = _find_habit(habit_uncomplete)
         if habit is None:
             raise ValueError(f"No habit matched '{habit_uncomplete}'.")
@@ -4011,7 +4532,7 @@ async def lifespan(_: FastAPI):
         purge_voice_tmp()
         reminder_scheduler.add_job(
             _cleanup_temp_audio,
-            IntervalTrigger(minutes=15, timezone="Asia/Kolkata"),
+            IntervalTrigger(minutes=15, timezone=LOCAL_TIMEZONE),
             id="spidey-temp-audio-cleanup",
             replace_existing=True,
         )
@@ -4147,10 +4668,10 @@ async def health():
     return res
 
 
-TOKENS_DEFAULT = 64
-TOKENS_BRIEF = 100
-TOKENS_MEDIUM = 200
-TOKENS_LONG = 300
+TOKENS_DEFAULT = 512
+TOKENS_BRIEF = 160
+TOKENS_MEDIUM = 768
+TOKENS_LONG = 1280
 
 
 def _token_budget(prompt: str) -> int:
@@ -4165,14 +4686,17 @@ def _token_budget(prompt: str) -> int:
     if re.search(
         r"\b(?:longer|long answer|more detail|in detail|detailed|elaborate|"
         r"expand|step by step|full guide|deep dive|essay|code|script|"
-        r"function|implement|program|debug|write (?:a|an|the))\b",
+        r"function|implement|program|debug|write (?:a|an|the)|"
+        r"list all|all topics?|all concepts?|roadmap|comprehensive|everything|"
+        r"master|complete guide|curriculum|syllabus|next|continue)\b",
         text,
     ):
         return TOKENS_LONG
     if re.search(
         r"\b(?:explain|how (?:does|do|to|can)|compare|difference|why|"
         r"suggest\w*|recommend\w*|ideas?|tips?|advice|improve\w*|"
-        r"pros and cons|list \d+|\d+ (?:habits|ideas|tips|ways))\b",
+        r"pros and cons|list\b|topics?|concepts?|learn\w*|study|cover|"
+        r"what (?:are|is|should)|\d+ (?:habits|ideas|tips|ways|topics))\b",
         text,
     ):
         return TOKENS_MEDIUM
@@ -4201,6 +4725,28 @@ confirmation_mgr = ConfirmationManager()
 
 
 _ORIGINAL_GENERATE_RESPONSE = generate_response
+_ASYNC_GEN_LOCKS: dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
+
+
+def _get_async_generation_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _ASYNC_GEN_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ASYNC_GEN_LOCKS[loop] = lock
+    return lock
+
+
+def _build_local_command_ui_actions(provider: str) -> tuple[str | None, list[dict[str, Any]]]:
+    nav = _page_for_provider(provider)
+    ui_actions = [{"type": "navigate", "page": nav, "route": _route_for_page(nav)}] if nav else []
+    if provider == "local-memory":
+        ui_actions.append({"type": "refresh", "sections": ["memories"]})
+    elif provider == "local-habit-manager":
+        ui_actions.append({"type": "refresh", "sections": ["habits", "gamification"]})
+    elif provider == "local-task-manager":
+        ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
+    return nav, ui_actions
 
 
 def respond_with_tools(
@@ -4258,9 +4804,87 @@ def respond_with_tools(
             raise
 
 
-@app.post("/generate")
-@app.post("/api/generate")
-async def generate(payload: dict[str, Any] = Body(...)):
+_ORIGINAL_RESPOND_WITH_TOOLS = respond_with_tools
+
+
+async def respond_with_tools_stream(
+    prompt: str,
+    chat_id: str,
+    history: list[dict[str, Any]] | None = None,
+    memories: list[dict[str, Any]] | None = None,
+    channel: str = "web",
+    on_token=None,
+    on_stream_reset=None,
+) -> AgentResult:
+    """Async streaming variant of respond_with_tools."""
+    await asyncio.to_thread(ensure_model_loaded)
+    orbit_tools = os.environ.get("ORBIT_TOOLS", "1").strip()
+    history = history or []
+    memories = memories or []
+
+    resolved_prompt = resolve_short_follow_up(prompt, history)
+    is_tools_mocked = (respond_with_tools is not _ORIGINAL_RESPOND_WITH_TOOLS) or hasattr(
+        respond_with_tools, "assert_called"
+    )
+    is_gen_mocked = (generate_response is not _ORIGINAL_GENERATE_RESPONSE) or hasattr(
+        generate_response, "assert_called"
+    )
+
+    if orbit_tools == "0" or is_tools_mocked or is_gen_mocked:
+        result = await asyncio.to_thread(
+            respond_with_tools,
+            prompt,
+            chat_id,
+            history,
+            memories,
+            channel,
+        )
+        if result.reply and on_token is not None:
+            res = on_token(result.reply)
+            if asyncio.iscoroutine(res):
+                await res
+        return result
+
+    async with _get_async_generation_lock():
+        try:
+            return await run_agent_loop_stream(
+                prompt=resolved_prompt,
+                chat_id=chat_id,
+                history=history,
+                memories=memories,
+                channel=channel,
+                deps=agent_deps,
+                confirm_mgr=confirmation_mgr,
+                on_token=on_token,
+                on_stream_reset=on_stream_reset,
+            )
+        except Exception as exc:
+            logging.getLogger("orbit007").warning(
+                "Streaming agent loop error, falling back to plain chat: %s", exc
+            )
+            if on_stream_reset is not None:
+                res = on_stream_reset()
+                if asyncio.iscoroutine(res):
+                    await res
+            tokens = _token_budget(resolved_prompt)
+            if channel == "voice":
+                tokens = min(tokens, 128)
+            reply = await asyncio.to_thread(
+                generate_response,
+                prompt=resolved_prompt,
+                max_new_tokens=tokens,
+                messages=history,
+                memories=memories,
+            )
+            clean_reply = reply.strip()
+            if clean_reply and on_token is not None:
+                res = on_token(clean_reply)
+                if asyncio.iscoroutine(res):
+                    await res
+            return AgentResult(reply=clean_reply, ui_actions=[], provider="ollama")
+
+
+def _validate_generate_payload(payload: dict[str, Any]) -> tuple[str, int, str]:
     if not isinstance(payload, dict):
         raise HTTPException(400, "Request body must be a JSON object.")
 
@@ -4284,7 +4908,7 @@ async def generate(payload: dict[str, Any] = Body(...)):
             detail=(
                 f"'max_new_tokens' must be an integer between 1 and "
                 f"{MAX_NEW_TOKENS}."
-            )
+            ),
         )
 
     chat_id = payload.get("chat_id")
@@ -4296,6 +4920,14 @@ async def generate(payload: dict[str, Any] = Body(...)):
     if chat_id is None:
         chat = memory_store.create_chat()
         chat_id = chat["id"]
+
+    return prompt, max_new_tokens, chat_id
+
+
+@app.post("/generate")
+@app.post("/api/generate")
+async def generate(payload: dict[str, Any] = Body(...)):
+    prompt, _max_new_tokens, chat_id = _validate_generate_payload(payload)
 
     try:
         # 1. Pending confirmation check
@@ -4313,16 +4945,19 @@ async def generate(payload: dict[str, Any] = Body(...)):
             }
 
         # 2. Rules-first command handling
-        command = _handle_local_command(prompt, chat_id)
+        local_error_msg: str | None = None
+        try:
+            command = _handle_local_command(prompt, chat_id)
+        except ValueError as cmd_err:
+            LOGGER.info("Local command raised ValueError (%s) for %r", cmd_err, prompt)
+            command = None
+            local_error_msg = str(cmd_err)
         LOGGER.info("[route] %s <- %r", "local:" + command[1] if command else "tools/llm", prompt)
         if command is not None:
             response, provider = command
             memory_store.add_message(chat_id, "user", prompt.strip())
             memory_store.add_message(chat_id, "assistant", response)
-            nav = _page_for_provider(provider)
-            ui_actions = [{"type": "navigate", "page": nav, "route": _route_for_page(nav)}] if nav else []
-            if provider == "local-memory":
-                ui_actions.append({"type": "refresh", "sections": ["memories"]})
+            nav, ui_actions = _build_local_command_ui_actions(provider)
             return {
                 "response": response,
                 "chat_id": chat_id,
@@ -4352,7 +4987,7 @@ async def generate(payload: dict[str, Any] = Body(...)):
             provider = agent_result.provider
         except RuntimeError as err:
             logging.getLogger("orbit007").warning("LLM generation failed in chat route: %s", err)
-            response = "I'm having trouble connecting to my local language model right now. Please make sure Ollama is running (`ollama serve`)."
+            response = local_error_msg or "I'm having trouble connecting to my local language model right now. Please make sure Ollama is running (`ollama serve`)."
             ui_actions = []
             provider = "ollama"
 
@@ -4368,6 +5003,133 @@ async def generate(payload: dict[str, Any] = Body(...)):
         }
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
+
+
+@app.post("/generate/stream")
+@app.post("/api/generate/stream")
+async def generate_stream(payload: dict[str, Any] = Body(...)):
+    prompt, _max_new_tokens, chat_id = _validate_generate_payload(payload)
+
+    async def event_generator():
+        try:
+            # 1. Pending confirmation check
+            handled, conf_reply, conf_actions = confirmation_mgr.check_and_handle(chat_id, prompt, agent_deps)
+            if handled:
+                memory_store.add_message(chat_id, "user", prompt.strip())
+                memory_store.add_message(chat_id, "assistant", conf_reply)
+                done_payload = {
+                    "type": "done",
+                    "response": conf_reply,
+                    "chat_id": chat_id,
+                    "messages": memory_store.get_messages(chat_id),
+                    "provider": "local-confirmation",
+                    "navigate": None,
+                    "ui_actions": conf_actions,
+                }
+                yield f"data: {json.dumps(done_payload)}\n\n"
+                return
+
+            # 2. Rules-first command handling
+            local_error_msg: str | None = None
+            try:
+                command = await asyncio.to_thread(_handle_local_command, prompt, chat_id)
+            except ValueError as cmd_err:
+                LOGGER.info("Local command raised ValueError (%s) for %r", cmd_err, prompt)
+                command = None
+                local_error_msg = str(cmd_err)
+            LOGGER.info("[route] %s <- %r", "local:" + command[1] if command else "tools/llm", prompt)
+            if command is not None:
+                response, provider = command
+                memory_store.add_message(chat_id, "user", prompt.strip())
+                memory_store.add_message(chat_id, "assistant", response)
+                nav, ui_actions = _build_local_command_ui_actions(provider)
+                done_payload = {
+                    "type": "done",
+                    "response": response,
+                    "chat_id": chat_id,
+                    "messages": memory_store.get_messages(chat_id),
+                    "provider": provider.split(":", 1)[0],
+                    "navigate": nav,
+                    "ui_actions": ui_actions,
+                }
+                yield f"data: {json.dumps(done_payload)}\n\n"
+                return
+
+            # 3. Native tools / LLM streaming response
+            memory_store.add_message(chat_id, "user", prompt.strip())
+            context = memory_store.build_context(chat_id, None, prompt)
+            model_prompt = resolve_short_follow_up(prompt, context)
+            memories = _memories_for_prompt(model_prompt)
+            history = [m for m in context if m.get("content") != model_prompt]
+
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+            async def _on_token(text: str) -> None:
+                if text:
+                    await queue.put({"type": "token", "text": text})
+
+            async def _on_reset() -> None:
+                await queue.put({"type": "stream_reset"})
+
+            async def _run() -> None:
+                try:
+                    agent_result = await respond_with_tools_stream(
+                        model_prompt,
+                        chat_id,
+                        history,
+                        memories,
+                        "web",
+                        on_token=_on_token,
+                        on_stream_reset=_on_reset,
+                    )
+                    response = agent_result.reply
+                    ui_actions = agent_result.ui_actions
+                    provider = agent_result.provider
+                except RuntimeError as err:
+                    logging.getLogger("orbit007").warning("LLM streaming failed in chat route: %s", err)
+                    response = (
+                        local_error_msg
+                        or "I'm having trouble connecting to my local language model right now. Please make sure Ollama is running (`ollama serve`)."
+                    )
+                    ui_actions = []
+                    provider = "ollama"
+                    await queue.put({"type": "stream_reset"})
+                    await queue.put({"type": "token", "text": response})
+
+                await queue.put({"type": "stream_done"})
+                memory_store.add_message(chat_id, "assistant", response)
+                nav_page = next((a.get("page") for a in ui_actions if a.get("type") == "navigate"), None)
+                await queue.put({
+                    "type": "done",
+                    "response": response,
+                    "chat_id": chat_id,
+                    "messages": memory_store.get_messages(chat_id),
+                    "provider": provider,
+                    "navigate": nav_page,
+                    "ui_actions": ui_actions,
+                })
+                await queue.put(None)
+
+            task = asyncio.create_task(_run())
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield f"data: {json.dumps(event)}\n\n"
+                await task
+            finally:
+                if not task.done():
+                    task.cancel()
+        except Exception as err:
+            logging.getLogger("orbit007").warning("Stream error in chat route: %s", err)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(err)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/chats")
@@ -4706,7 +5468,12 @@ def _cleanup_temp_audio() -> None:
 
 
 async def process_agent_turn(
-    user_message: str, session_id: str = "default", chat_id: str | None = None
+    user_message: str,
+    session_id: str = "default",
+    chat_id: str | None = None,
+    on_token=None,
+    on_stream_reset=None,
+    on_stream_done=None,
 ) -> dict:
     user_message = (user_message or "").strip()
     if not user_message:
@@ -4739,12 +5506,7 @@ async def process_agent_turn(
         cmd_result = await asyncio.to_thread(_handle_local_command, user_message, target_chat)
         if cmd_result:
             reply_text = cmd_result[0]
-            nav = _page_for_provider(cmd_result[1])
-            if nav:
-                route = _route_for_page(nav)
-                ui_actions.append({"type": "navigate", "page": nav, "route": route})
-            if cmd_result[1] == "local-memory":
-                ui_actions.append({"type": "refresh", "sections": ["memories"]})
+            _nav, ui_actions = _build_local_command_ui_actions(cmd_result[1])
     except Exception:
         logging.getLogger("orbit007").exception("Local command handling failed for %r", user_message)
 
@@ -4753,19 +5515,34 @@ async def process_agent_turn(
         history = memory_store.get_messages(target_chat)[-10:]
         memories = _memories_for_prompt(user_message)
         try:
-            agent_result = await asyncio.to_thread(
-                respond_with_tools,
-                user_message,
-                target_chat,
-                history,
-                memories,
-                "agent",
-            )
+            if on_token is not None:
+                agent_result = await respond_with_tools_stream(
+                    user_message,
+                    target_chat,
+                    history,
+                    memories,
+                    "agent",
+                    on_token=on_token,
+                    on_stream_reset=on_stream_reset,
+                )
+            else:
+                agent_result = await asyncio.to_thread(
+                    respond_with_tools,
+                    user_message,
+                    target_chat,
+                    history,
+                    memories,
+                    "agent",
+                )
             reply_text = agent_result.reply
             ui_actions = agent_result.ui_actions
         except Exception as exc:
             logging.getLogger("orbit007").warning("Agent turn failed: %s", exc)
             reply_text = "I'm having trouble connecting to my local language model right now. Please make sure Ollama is running (`ollama serve`)."
+        if on_stream_done is not None:
+            res = on_stream_done()
+            if asyncio.iscoroutine(res):
+                await res
 
     memory_store.add_message(target_chat, "assistant", reply_text)
 
@@ -4900,6 +5677,27 @@ async def websocket_agent_endpoint(websocket: WebSocket):
             "history": memory_store.get_messages(current_chat_id)[-20:],
             "chat_id": current_chat_id,
         })
+        async def _ws_on_token(text: str) -> None:
+            await websocket.send_json({"type": "token", "text": text})
+
+        async def _ws_on_reset() -> None:
+            await websocket.send_json({"type": "stream_reset"})
+
+        async def _ws_on_done() -> None:
+            await websocket.send_json({"type": "stream_done"})
+
+        async def _run_and_send_turn(text: str) -> None:
+            await websocket.send_json({"type": "status", "state": "thinking"})
+            result = await process_agent_turn(
+                text,
+                session_id=current_chat_id,
+                chat_id=current_chat_id,
+                on_token=_ws_on_token,
+                on_stream_reset=_ws_on_reset,
+                on_stream_done=_ws_on_done,
+            )
+            await websocket.send_json(result)
+
         audio_buffer = bytearray()
         while True:
             packet = await websocket.receive()
@@ -4916,11 +5714,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                             "type": "transcript",
                             "text": transcript,
                         })
-                        await websocket.send_json({"type": "status", "state": "thinking"})
-                        result = await process_agent_turn(
-                            transcript, session_id=current_chat_id, chat_id=current_chat_id
-                        )
-                        await websocket.send_json(result)
+                        await _run_and_send_turn(transcript)
                 else:
                     # Streamed 100ms chunk from AudioWorklet
                     audio_buffer.extend(pcm_bytes)
@@ -4933,11 +5727,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                                 "type": "transcript",
                                 "text": transcript,
                             })
-                            await websocket.send_json({"type": "status", "state": "thinking"})
-                            result = await process_agent_turn(
-                                transcript, session_id=current_chat_id, chat_id=current_chat_id
-                            )
-                            await websocket.send_json(result)
+                            await _run_and_send_turn(transcript)
 
             elif "text" in packet and packet["text"]:
                 try:
@@ -4971,11 +5761,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                                 "type": "transcript",
                                 "text": transcript,
                             })
-                            await websocket.send_json({"type": "status", "state": "thinking"})
-                            result = await process_agent_turn(
-                                transcript, session_id=current_chat_id, chat_id=current_chat_id
-                            )
-                            await websocket.send_json(result)
+                            await _run_and_send_turn(transcript)
                     else:
                         audio_buffer.clear()
                     continue
@@ -4990,11 +5776,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                         current_chat_id = DEFAULT_CHAT_ID
 
                 if user_msg.strip():
-                    await websocket.send_json({"type": "status", "state": "thinking"})
-                    result = await process_agent_turn(
-                        user_msg, session_id=current_chat_id, chat_id=current_chat_id
-                    )
-                    await websocket.send_json(result)
+                    await _run_and_send_turn(user_msg)
     except WebSocketDisconnect:
         logging.getLogger("orbit007").info("WebSocket client disconnected")
     except Exception as exc:

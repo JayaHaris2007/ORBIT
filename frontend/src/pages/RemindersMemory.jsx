@@ -128,10 +128,10 @@ const RemindersMemory = () => {
 
     return (
         <div className="space-y-6 pb-20">
-            <header>
-                <p className="text-xs uppercase tracking-[0.2em] text-textMuted">Remembered for you</p>
-                <h1 className="mt-2 text-3xl font-bold uppercase tracking-widest text-white glow-white">Reminders &amp; memory</h1>
-                <p className="mt-1 text-sm font-mono text-textMuted">Everything S.P.I.D.E.Y should not forget.</p>
+            <header className="border-b border-[#F2EFE9]/15 pb-5">
+                <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">04 · Recall &amp; Schedule</p>
+                <h1 className="mt-1 text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9]">Reminders &amp; memory</h1>
+                <p className="mt-1 font-mono text-xs text-[#9C968E]">Everything S.P.I.D.E.Y should not forget.</p>
             </header>
 
             {error && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}

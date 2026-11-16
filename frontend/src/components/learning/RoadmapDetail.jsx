@@ -5,6 +5,7 @@ import {
     Pencil, BookOpen, Sparkles,
 } from 'lucide-react';
 import { learningService } from '../../services/learningService';
+import { useAppData } from '../../context/AppDataContext';
 
 const STATUS_LABELS = {
     not_started: 'Not started',
@@ -21,6 +22,7 @@ const STATUS_CHIP = {
 };
 
 const RoadmapDetail = ({ roadmap, onClose, onChanged }) => {
+    const { revision } = useAppData();
     const [detail, setDetail] = useState(roadmap);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -37,7 +39,6 @@ const RoadmapDetail = ({ roadmap, onClose, onChanged }) => {
 
     useEffect(() => {
         let cancelled = false;
-        setLoading(true);
         learningService.getRoadmap(roadmap.id)
             .then((data) => {
                 if (!cancelled) {
@@ -52,7 +53,7 @@ const RoadmapDetail = ({ roadmap, onClose, onChanged }) => {
                 }
             });
         return () => { cancelled = true; };
-    }, [roadmap.id]);
+    }, [roadmap.id, revision]);
 
     const reload = async () => {
         const data = await learningService.getRoadmap(roadmap.id);

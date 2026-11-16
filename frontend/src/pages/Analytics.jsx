@@ -77,9 +77,12 @@ const Analytics = () => {
 
     return (
         <div className="space-y-8 pb-20">
-            <h1 className="text-3xl font-bold text-white uppercase tracking-widest glow-white">
-                Analytics
-            </h1>
+            <header className="border-b border-[#F2EFE9]/15 pb-5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">06 · Telemetry</span>
+                <h1 className="mt-1 text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9]">
+                    Analytics
+                </h1>
+            </header>
 
             {/* Overview Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-4 gap-6">

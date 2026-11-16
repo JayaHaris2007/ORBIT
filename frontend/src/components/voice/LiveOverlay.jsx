@@ -1,6 +1,36 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Headphones, X, Square, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import NeuralBrainCanvas from '../three/NeuralBrainCanvas';
+import SpiderMark from '../brand/SpiderMark';
+
+const STATE_BADGES = {
+    listening: {
+        label: 'Listening',
+        pill: 'border-[#D95D24] bg-[#D95D24] text-[#111111]',
+        dot: 'bg-[#111111]',
+    },
+    transcribing: {
+        label: 'Transcribing',
+        pill: 'border-[#D95D24]/70 bg-[#1B1612] text-[#F2EFE9]',
+        dot: 'bg-[#D95D24]',
+    },
+    thinking: {
+        label: 'Processing',
+        pill: 'border-[#F2EFE9] bg-[#F2EFE9] text-[#111111]',
+        dot: 'bg-[#D95D24]',
+    },
+    speaking: {
+        label: 'Speaking',
+        pill: 'border-[#F2EFE9]/50 bg-[#1A1917] text-[#F2EFE9]',
+        dot: 'bg-[#D95D24]',
+    },
+    idle: {
+        label: 'Standby',
+        pill: 'border-[#F2EFE9]/20 bg-[#151515] text-[#9C968E]',
+        dot: 'bg-[#9C968E]',
+    },
+};
 
 export default function LiveOverlay({
     isOpen,
@@ -10,35 +40,13 @@ export default function LiveOverlay({
     timing = {},
     error = null,
     onStopTurn,
-    onClose
+    onClose,
 }) {
     const [showDebug, setShowDebug] = useState(false);
 
     if (!isOpen) return null;
 
-    const stateColors = {
-        listening: 'from-orange-500/30 to-red-500/20 border-orange-500/50 text-orange-300',
-        transcribing: 'from-amber-500/30 to-orange-500/20 border-amber-500/50 text-amber-300',
-        thinking: 'from-blue-500/30 to-indigo-500/20 border-blue-500/50 text-blue-300',
-        speaking: 'from-emerald-500/30 to-teal-500/20 border-emerald-500/50 text-emerald-300',
-        idle: 'from-neutral-700/30 to-neutral-800/20 border-neutral-600/40 text-neutral-400'
-    };
-
-    const orbScale = {
-        listening: [1, 1.15, 1],
-        transcribing: [1, 1.05, 1],
-        thinking: [1, 1.25, 0.95, 1],
-        speaking: [1, 1.2, 1.05, 1.15, 1],
-        idle: [1]
-    };
-
-    const orbDuration = {
-        listening: 1.8,
-        transcribing: 1.2,
-        thinking: 2.0,
-        speaking: 1.0,
-        idle: 0
-    };
+    const badge = STATE_BADGES[state] || STATE_BADGES.idle;
 
     return (
         <AnimatePresence>
@@ -46,22 +54,27 @@ export default function LiveOverlay({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-black/90 p-6 backdrop-blur-xl"
+                transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-[#111111]/98 p-6"
             >
                 {/* Header */}
-                <div className="flex w-full max-w-xl items-center justify-between">
-                    <div className="flex items-center gap-2">
-                        <span className="flex h-2.5 w-2.5 rounded-full bg-orange-500 animate-ping" />
-                        <span className="text-xs font-semibold uppercase tracking-wider text-neutral-300">
-                            S.P.I.D.E.Y. Live
+                <div className="relative z-10 flex w-full max-w-2xl items-center justify-between border-b border-[#F2EFE9]/15 pb-4">
+                    <div className="flex items-center gap-3">
+                        <SpiderMark size={30} state={state} animateEntrance={false} />
+                        <span className="font-mono text-xs font-bold uppercase tracking-[0.22em] text-[#F2EFE9]">
+                            S.P.I.D.E.Y. Live Core
+                        </span>
+                        <span className={`inline-flex items-center gap-1.5 border px-2.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.14em] ${badge.pill}`}>
+                            <span className={`h-1.5 w-1.5 ${badge.dot}`} />
+                            {badge.label}
                         </span>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                         <button
                             type="button"
                             onClick={() => setShowDebug(!showDebug)}
-                            className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-neutral-400 hover:text-white"
+                            className="flex items-center gap-1.5 border border-[#F2EFE9]/15 bg-[#151515] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[#9C968E] transition-colors hover:border-[#D95D24] hover:text-[#F2EFE9]"
                             title="Toggle latency diagnostics"
                         >
                             <Clock size={12} />
@@ -72,116 +85,86 @@ export default function LiveOverlay({
                         <button
                             type="button"
                             onClick={onClose}
-                            className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/5 text-neutral-400 transition-colors hover:border-white/20 hover:text-white"
+                            className="grid h-8 w-8 place-items-center border border-[#F2EFE9]/15 bg-[#151515] text-[#9C968E] transition-colors hover:border-[#D95D24] hover:text-[#F2EFE9]"
                             aria-label="End live session"
                         >
-                            <X size={16} />
+                            <X size={15} />
                         </button>
                     </div>
                 </div>
 
-                {/* Center Animated Orb */}
-                <div className="flex flex-col items-center justify-center my-auto">
-                    <div className="relative flex items-center justify-center">
-                        {/* Outer Glow */}
-                        <motion.div
-                            animate={{
-                                scale: orbScale[state] || [1],
-                                opacity: [0.3, 0.6, 0.3]
-                            }}
-                            transition={{
-                                repeat: Infinity,
-                                duration: orbDuration[state] || 2,
-                                ease: 'easeInOut'
-                            }}
-                            className={`absolute h-48 w-48 rounded-full bg-gradient-to-tr ${
-                                state === 'speaking'
-                                    ? 'from-emerald-500/40 to-teal-500/30'
-                                    : state === 'thinking'
-                                    ? 'from-blue-500/40 to-indigo-500/30'
-                                    : 'from-orange-500/40 to-red-500/30'
-                            } blur-3xl`}
+                {/* Center 3D Neural Particle Sphere */}
+                <div className="relative z-10 my-auto flex w-full max-w-2xl flex-col items-center justify-center">
+                    <div className="relative flex h-[280px] w-[280px] items-center justify-center sm:h-[340px] sm:w-[340px]">
+                        <div className="pointer-events-none absolute inset-4 rounded-full border border-[#F2EFE9]/12" />
+                        <div className="pointer-events-none absolute inset-12 rounded-full border border-[#D95D24]/25" />
+                        <NeuralBrainCanvas
+                            size="overlay"
+                            stateOverride={state}
+                            className="h-full w-full"
                         />
-
-                        {/* Interactive Orb */}
-                        <motion.div
-                            animate={{
-                                scale: orbScale[state] || [1]
-                            }}
-                            transition={{
-                                repeat: Infinity,
-                                duration: orbDuration[state] || 2,
-                                ease: 'easeInOut'
-                            }}
-                            className={`relative flex h-36 w-36 items-center justify-center rounded-full border-2 bg-gradient-to-b shadow-[0_0_40px_rgba(255,106,26,0.2)] ${
-                                stateColors[state] || stateColors.idle
-                            }`}
-                        >
-                            <span className="text-xs font-bold uppercase tracking-widest">
-                                {state}
-                            </span>
-                        </motion.div>
                     </div>
 
                     {/* Speech Display */}
-                    <div className="mt-8 max-w-md text-center">
+                    <div className="mt-4 max-w-lg text-center">
                         {error && (
-                            <p className="mb-3 rounded-lg border border-red-500/30 bg-red-950/40 px-3 py-1.5 text-xs font-medium text-red-300">
+                            <p className="mb-3 border border-[#D95D24] bg-[#1E130F] px-3.5 py-2 font-mono text-xs text-[#F2EFE9]">
                                 {error}
                             </p>
                         )}
                         {transcript && (
-                            <p className="text-xs text-neutral-400 italic">
+                            <p className="font-mono text-xs italic text-[#9C968E]">
                                 &ldquo;{transcript}&rdquo;
                             </p>
                         )}
                         {reply && (
-                            <p className="mt-2 text-sm leading-relaxed text-white font-medium">
+                            <p className="mt-2 border border-[#F2EFE9]/15 bg-[#151515] px-4 py-3 text-sm font-medium leading-relaxed text-[#F2EFE9]">
                                 {reply}
                             </p>
                         )}
                     </div>
                 </div>
 
-                {/* Debug Panel (Off by default) */}
+                {/* Debug Panel */}
                 {showDebug && (
                     <motion.div
-                        initial={{ opacity: 0, y: 10 }}
+                        initial={{ opacity: 0, y: 6 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="mb-4 w-full max-w-md rounded-xl border border-white/10 bg-neutral-900/90 p-3 text-[11px] font-mono text-neutral-300"
+                        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                        className="relative z-10 mb-4 w-full max-w-md border border-[#F2EFE9]/15 bg-[#151515] p-3 font-mono text-[11px] text-[#9C968E]"
                     >
                         <div className="grid grid-cols-2 gap-2">
-                            <div>Speech &rarr; Transcript: <span className="text-orange-400">{timing.transcript || 0} ms</span></div>
-                            <div>Transcript &rarr; Reply: <span className="text-orange-400">{timing.firstSentence || 0} ms</span></div>
-                            <div>Sentence &rarr; Audio: <span className="text-orange-400">{timing.firstAudio || 0} ms</span></div>
-                            <div className="font-bold">Total Turn Latency: <span className="text-emerald-400">{timing.total || 0} ms</span></div>
+                            <div>Speech &rarr; Transcript: <span className="text-[#D95D24]">{timing.transcript || 0} ms</span></div>
+                            <div>Transcript &rarr; Reply: <span className="text-[#D95D24]">{timing.firstSentence || 0} ms</span></div>
+                            <div>Sentence &rarr; Audio: <span className="text-[#D95D24]">{timing.firstAudio || 0} ms</span></div>
+                            <div className="font-bold text-[#F2EFE9]">Total Turn: <span className="text-[#D95D24]">{timing.total || 0} ms</span></div>
                         </div>
                     </motion.div>
                 )}
 
                 {/* Footer Controls */}
-                <div className="flex w-full max-w-xl flex-col items-center gap-3">
-                    <div className="flex items-center gap-1.5 text-[11px] text-neutral-500">
-                        <Headphones size={13} />
-                        <span>Tip: Wear headphones for barge-in echo suppression.</span>
+                <div className="relative z-10 flex w-full max-w-2xl flex-col items-center gap-3 border-t border-[#F2EFE9]/15 pt-4">
+                    <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[#9C968E]">
+                        <Headphones size={12} className="text-[#D95D24]" />
+                        <span>Wear headphones for barge-in echo suppression</span>
                     </div>
 
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3">
                         <button
                             type="button"
                             onClick={onStopTurn}
-                            className="flex items-center gap-1.5 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs font-semibold text-red-300 transition-colors hover:border-red-400 hover:bg-red-500/20"
+                            className="flex items-center gap-1.5 border border-[#D95D24] bg-[#D95D24] px-4 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-[#111111] transition-colors hover:bg-[#C44E19]"
                         >
-                            <Square size={13} className="fill-current" />
+                            <Square size={12} className="fill-current" />
                             <span>Stop Turn</span>
                         </button>
 
                         <button
                             type="button"
                             onClick={onClose}
-                            className="rounded-xl border border-white/20 bg-white/10 px-5 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/20"
+                            className="border border-[#F2EFE9]/25 bg-[#151515] px-5 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-[#F2EFE9] transition-colors hover:border-[#D95D24] hover:text-[#D95D24]"
                         >
-                            End Conversation
+                            End Session
                         </button>
                     </div>
                 </div>
@@ -189,4 +172,3 @@ export default function LiveOverlay({
         </AnimatePresence>
     );
 }
-

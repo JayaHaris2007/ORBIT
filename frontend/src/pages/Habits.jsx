@@ -110,10 +110,11 @@ const Habits = () => {
 
     return (
         <div className="relative min-h-[calc(100vh-100px)] pb-20">
-            <div className="flex justify-between items-center mb-8">
+            <div className="mb-8 flex items-end justify-between border-b border-[#F2EFE9]/15 pb-5">
                 <div>
-                    <h1 className="text-3xl font-bold text-white uppercase tracking-widest glow-white">Your habits</h1>
-                    <p className="text-textMuted text-xs font-mono mt-1">Small steps, repeated often.</p>
+                    <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">02 · Discipline</span>
+                    <h1 className="mt-1 text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9]">Your habits</h1>
+                    <p className="mt-1 font-mono text-xs text-[#9C968E]">Small steps, repeated often.</p>
                 </div>
                 <button
                     onClick={() => {
@@ -122,9 +123,10 @@ const Habits = () => {
                         setSelectedIcon('Activity');
                         setIsModalOpen(true);
                     }}
-                    className="bg-white hover:bg-white/90 text-black p-2 rounded-full shadow-[0_0_15px_rgba(255,255,255,0.3)] transition-all transform hover:scale-105"
+                    className="border border-[#D95D24] bg-[#D95D24] p-2.5 text-[#111111] transition-colors hover:bg-[#C44E19]"
+                    aria-label="Add habit"
                 >
-                    <Plus size={24} />
+                    <Plus size={20} />
                 </button>
             </div>
 

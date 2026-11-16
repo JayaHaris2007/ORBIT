@@ -8,9 +8,11 @@ swapping providers later means touching this file only.
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import os
 import re
+import urllib.request
 from typing import Any, NotRequired, TypedDict
 from urllib.parse import urlsplit
 
@@ -81,15 +83,50 @@ def _api_key() -> str:
     return api_key
 
 
+class _HttpTavilyClient:
+    """Lightweight urllib fallback when tavily-python's tiktoken C-extension is unavailable."""
+
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+
+    def search(
+        self,
+        *,
+        query: str,
+        max_results: int = 5,
+        search_depth: str = "basic",
+        include_answer: bool = False,
+        include_images: bool = False,
+        include_raw_content: bool = False,
+        timeout: float = 15.0,
+    ) -> dict[str, Any]:
+        body = json.dumps(
+            {
+                "api_key": self.api_key,
+                "query": query,
+                "max_results": max_results,
+                "search_depth": search_depth,
+                "include_answer": include_answer,
+                "include_images": include_images,
+                "include_raw_content": include_raw_content,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.tavily.com/search",
+            data=body,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+
 def _build_client(api_key: str):
     try:
         from tavily import TavilyClient
-    except ImportError as error:
-        raise SearchNotConfigured(
-            "Web research needs the tavily-python package. Install it with "
-            "pip install tavily-python."
-        ) from error
-    return TavilyClient(api_key=api_key)
+        return TavilyClient(api_key=api_key)
+    except ImportError:
+        return _HttpTavilyClient(api_key=api_key)
 
 
 def _call_provider(client, query: str, max_results: int, search_depth: str) -> dict[str, Any]:

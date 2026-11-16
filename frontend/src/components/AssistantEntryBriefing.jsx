@@ -184,7 +184,7 @@ function useBriefingSpeech(textToSpeak) {
             }
         } finally {
             isFetchingRef.current = false;
-            if (queue && !queue.playing && queue.queue.length === 0) {
+            if (queue && !queue.playing && queue.queue.length === 0 && !activeUtteranceRef.current) {
                 setSpeaking(false);
             }
         }

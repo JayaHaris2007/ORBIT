@@ -1,5 +1,4 @@
-import React from 'react';
-import { Volume2, VolumeX, AlertCircle } from 'lucide-react';
+import { Volume2, VolumeX } from 'lucide-react';
 
 export default function SpeakToggle({ speakEnabled, engineReady, onToggle, disabled = false, error = null }) {
     const isUnavailable = !engineReady && Boolean(error);
@@ -25,32 +24,31 @@ export default function SpeakToggle({ speakEnabled, engineReady, onToggle, disab
                         ? 'Speak replies: ON'
                         : 'Speak replies: OFF'
                 }
-                className={`group relative flex h-7 items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-medium transition-all ${
+                className={`group relative flex h-7 items-center gap-1.5 border px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.1em] transition-colors ${
                     isUnavailable
-                        ? 'border-white/5 bg-white/[0.02] text-neutral-500 cursor-not-allowed opacity-60'
+                        ? 'cursor-not-allowed border-[#F2EFE9]/10 bg-[#111111] text-[#9C968E] opacity-50'
                         : speakEnabled
-                        ? 'border-orange-500/40 bg-orange-500/10 text-orange-300 shadow-[0_0_12px_rgba(255,106,26,0.15)] hover:border-orange-400 hover:bg-orange-500/20'
-                        : 'border-white/10 bg-white/5 text-neutral-400 hover:border-white/20 hover:text-white'
+                        ? 'border-[#D95D24] bg-[#D95D24] text-[#111111] hover:bg-[#C44E19]'
+                        : 'border-[#F2EFE9]/15 bg-[#151515] text-[#9C968E] hover:border-[#D95D24] hover:text-[#F2EFE9]'
                 }`}
             >
                 {isUnavailable ? (
                     <>
-                        <VolumeX size={13} className="text-neutral-500" />
-                        <span className="hidden sm:inline text-[10px] text-neutral-500">Voice unavailable</span>
+                        <VolumeX size={12} />
+                        <span className="hidden sm:inline">Muted</span>
                     </>
                 ) : speakEnabled ? (
                     <>
-                        <Volume2 size={13} className="text-orange-400 animate-pulse" />
-                        <span className="hidden sm:inline text-[10px] tracking-wide">Speak ON</span>
+                        <Volume2 size={12} />
+                        <span className="hidden sm:inline">Speak ON</span>
                     </>
                 ) : (
                     <>
-                        <VolumeX size={13} className="text-neutral-400 group-hover:text-white" />
-                        <span className="hidden sm:inline text-[10px] text-neutral-400 group-hover:text-white">Speak OFF</span>
+                        <VolumeX size={12} />
+                        <span className="hidden sm:inline">Speak OFF</span>
                     </>
                 )}
             </button>
         </div>
     );
 }
-

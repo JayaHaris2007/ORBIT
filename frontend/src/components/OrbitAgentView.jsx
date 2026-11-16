@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useOrbitAgent } from '../hooks/useOrbitAgent';
-import { Mic, MicOff, Send, Volume2, CheckCircle2, Circle, Trash2, Plus, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { Mic, MicOff, Send, CheckCircle2, Circle, Trash2, Plus, Wifi, WifiOff, Loader2 } from 'lucide-react';
 
 export default function OrbitAgentView({ activeChatId }) {
   const {
@@ -39,54 +39,51 @@ export default function OrbitAgentView({ activeChatId }) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0d0f12] text-white">
+    <div className="flex h-full flex-col bg-[#111111] text-[#F2EFE9]">
       {/* Top Status Bar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-white/[0.02]">
+      <div className="flex items-center justify-between border-b border-[#F2EFE9]/15 bg-[#141414] px-4 py-2">
         <div className="flex items-center gap-2">
           {connected ? (
-            <span className="flex items-center gap-1.5 text-xs text-emerald-400 font-mono">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <Wifi size={14} /> LIVE WS
+            <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[#F2EFE9]">
+              <span className="inline-block h-2 w-2 bg-[#D95D24]" />
+              <Wifi size={12} className="text-[#D95D24]" /> LIVE WS
             </span>
           ) : (
-            <span className="flex items-center gap-1.5 text-xs text-amber-400 font-mono">
-              <WifiOff size={14} /> RECONNECTING
+            <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[#9C968E]">
+              <WifiOff size={12} /> RECONNECTING
             </span>
           )}
         </div>
-        <div className="text-[11px] font-mono text-neutral-400">
+        <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#9C968E]">
           ORBIT007 Agent
         </div>
       </div>
 
       {/* Main Content Area: Split Reminders & Chat */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        {/* Active Reminders Accordion / Strip */}
-        <div className="border-b border-white/10 bg-white/[0.01] px-4 py-2">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-orange-400">
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
+        {/* Active Reminders Strip */}
+        <div className="border-b border-[#F2EFE9]/15 bg-[#131313] px-4 py-2.5">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#D95D24]">
               Live Reminders ({reminders.length})
             </span>
             <button
               type="button"
               onClick={() => setShowReminderForm(!showReminderForm)}
-              className="text-xs text-neutral-300 hover:text-white flex items-center gap-1 bg-white/5 hover:bg-white/10 px-2 py-0.5 rounded border border-white/10"
+              className="flex items-center gap-1 border border-[#F2EFE9]/15 bg-[#151515] px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] text-[#F2EFE9] transition-colors hover:border-[#D95D24] hover:text-[#D95D24]"
             >
-              <Plus size={12} /> {showReminderForm ? 'Cancel' : 'Add'}
+              <Plus size={11} /> {showReminderForm ? 'Cancel' : 'Add'}
             </button>
           </div>
 
           {showReminderForm && (
-            <form onSubmit={handleCreateReminder} className="my-2 p-2 rounded bg-black/40 border border-orange-500/30 flex flex-col gap-2">
+            <form onSubmit={handleCreateReminder} className="my-2 flex flex-col gap-2 border border-[#D95D24]/40 bg-[#111111] p-2.5">
               <input
                 type="text"
                 placeholder="Reminder title..."
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                className="w-full bg-neutral-900 border border-white/10 rounded px-2 py-1 text-xs text-white outline-none focus:border-orange-400"
+                className="w-full border border-[#F2EFE9]/15 bg-[#151515] px-2.5 py-1.5 text-xs text-[#F2EFE9] outline-none focus:border-[#D95D24]"
               />
               <div className="flex gap-2">
                 <input
@@ -94,12 +91,12 @@ export default function OrbitAgentView({ activeChatId }) {
                   placeholder="When (e.g. 5:00 PM or tomorrow)"
                   value={newRemindAt}
                   onChange={(e) => setNewRemindAt(e.target.value)}
-                  className="flex-1 bg-neutral-900 border border-white/10 rounded px-2 py-1 text-xs text-white outline-none focus:border-orange-400"
+                  className="flex-1 border border-[#F2EFE9]/15 bg-[#151515] px-2.5 py-1.5 text-xs text-[#F2EFE9] outline-none focus:border-[#D95D24]"
                 />
                 <button
                   type="submit"
                   disabled={!newTitle.trim() || !newRemindAt.trim()}
-                  className="bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-black font-bold px-3 py-1 rounded text-xs"
+                  className="border border-[#D95D24] bg-[#D95D24] px-3 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[#111111] disabled:opacity-40"
                 >
                   Save
                 </button>
@@ -107,36 +104,38 @@ export default function OrbitAgentView({ activeChatId }) {
             </form>
           )}
 
-          <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
+          <div className="max-h-28 space-y-1 overflow-y-auto pr-1">
             {reminders.length === 0 ? (
-              <p className="text-[11px] text-neutral-500 italic py-1">No active reminders in database.</p>
+              <p className="py-1 font-mono text-[11px] text-[#9C968E]">No active reminders in database.</p>
             ) : (
               reminders.map((r) => (
                 <div
                   key={r.id}
-                  className={`flex items-center justify-between gap-2 p-1.5 rounded text-xs transition-colors ${
-                    r.completed ? 'bg-white/[0.02] text-neutral-500 line-through' : 'bg-white/[0.04] text-neutral-200'
+                  className={`flex items-center justify-between gap-2 border px-2 py-1.5 text-xs transition-colors ${
+                    r.completed
+                      ? 'border-[#F2EFE9]/10 bg-[#111111] text-[#9C968E] line-through'
+                      : 'border-[#F2EFE9]/15 bg-[#151515] text-[#F2EFE9]'
                   }`}
                 >
                   <button
                     type="button"
                     onClick={() => toggleReminder(r.id, !r.completed)}
-                    className="flex items-center gap-1.5 min-w-0 text-left flex-1"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                   >
                     {r.completed ? (
-                      <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
+                      <CheckCircle2 size={13} className="shrink-0 text-[#9C968E]" />
                     ) : (
-                      <Circle size={13} className="text-orange-400 shrink-0" />
+                      <Circle size={13} className="shrink-0 text-[#D95D24]" />
                     )}
                     <span className="truncate">{r.title || r.text}</span>
-                    <span className="text-[10px] text-neutral-500 shrink-0">
+                    <span className="shrink-0 font-mono text-[10px] text-[#9C968E]">
                       ({r.remind_at || r.run_at})
                     </span>
                   </button>
                   <button
                     type="button"
                     onClick={() => deleteReminder(r.id)}
-                    className="text-neutral-500 hover:text-red-400 p-0.5"
+                    className="p-0.5 text-[#9C968E] transition-colors hover:text-[#D95D24]"
                     title="Delete reminder"
                   >
                     <Trash2 size={12} />
@@ -148,11 +147,11 @@ export default function OrbitAgentView({ activeChatId }) {
         </div>
 
         {/* Message History */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 space-y-3 overflow-y-auto p-4">
           {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center text-neutral-500">
-              <p className="text-xs">No messages yet in this session.</p>
-              <p className="text-[11px] mt-1 text-neutral-600">
+            <div className="flex h-full flex-col items-center justify-center text-center text-[#9C968E]">
+              <p className="font-mono text-xs uppercase tracking-[0.14em]">No messages in session</p>
+              <p className="mt-1 text-[11px] text-[#9C968E]/70">
                 Say &ldquo;remind me to check server at 6pm&rdquo; or start speaking.
               </p>
             </div>
@@ -165,60 +164,62 @@ export default function OrbitAgentView({ activeChatId }) {
                   className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
                 >
                   <div
-                    className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
+                    className={`max-w-[88%] border px-3 py-2 text-xs leading-relaxed ${
                       isUser
-                        ? 'bg-orange-500/20 text-orange-100 border border-orange-500/30'
-                        : 'bg-white/[0.06] text-neutral-200 border border-white/10'
+                        ? 'border-[#D95D24]/60 bg-[#1B1511] text-[#F2EFE9]'
+                        : 'border-[#F2EFE9]/14 bg-[#161616] text-[#F2EFE9]'
                     }`}
                   >
-                    <div className="text-[9px] font-mono opacity-50 mb-0.5 uppercase tracking-wide">
+                    <div className="mb-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-[#9C968E]">
                       {m.role}
                     </div>
-                    <div>{m.content}</div>
+                    <div>
+                      {m.content}
+                      {m.streaming && <span className="ml-0.5 inline-block h-3 w-1.5 bg-[#D95D24] align-middle animate-pulse" />}
+                    </div>
                   </div>
                 </div>
               );
             })
           )}
-          {isLoading && (
-            <div className="flex items-center gap-2 text-xs text-orange-400 animate-pulse">
-              <Loader2 size={13} className="animate-spin" />
-              <span>ORBIT007 is thinking...</span>
+          {isLoading && !messages.some((m) => m.streaming) && (
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#D95D24]">
+              <Loader2 size={12} className="animate-spin" />
+              <span>ORBIT007 Processing</span>
             </div>
           )}
         </div>
       </div>
 
       {/* Bottom Bar: AudioWorklet Mic + Input */}
-      <div className="p-3 border-t border-white/10 bg-black/40">
+      <div className="border-t border-[#F2EFE9]/15 bg-[#141414] p-3">
         <form onSubmit={handleSend} className="flex items-center gap-2">
-          {/* AudioWorklet Microphone Capture Button */}
           <button
             type="button"
             onClick={isRecording ? stopVoiceCapture : startVoiceCapture}
-            className={`p-2.5 rounded-xl border transition-all ${
+            className={`border p-2.5 transition-colors ${
               isRecording
-                ? 'bg-red-500/20 border-red-500 text-red-400 animate-pulse ring-2 ring-red-500/50'
-                : 'bg-white/5 border-white/10 text-neutral-400 hover:text-white hover:bg-white/10'
+                ? 'border-[#D95D24] bg-[#D95D24] text-[#111111]'
+                : 'border-[#F2EFE9]/15 bg-[#111111] text-[#9C968E] hover:border-[#D95D24] hover:text-[#F2EFE9]'
             }`}
             title={isRecording ? 'Stop voice capture' : 'Start voice capture (AudioWorklet PCM)'}
           >
-            {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
+            {isRecording ? <MicOff size={15} /> : <Mic size={15} />}
           </button>
 
           <input
             type="text"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder={isRecording ? 'Streaming audio...' : 'Type a message or reminder command...'}
+            placeholder={isRecording ? 'Streaming audio...' : 'Type a message or command...'}
             disabled={isLoading}
-            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder:text-neutral-500 outline-none focus:border-orange-500/50"
+            className="flex-1 border border-[#F2EFE9]/15 bg-[#111111] px-3 py-2 text-xs text-[#F2EFE9] placeholder:text-[#9C968E]/60 outline-none focus:border-[#D95D24]"
           />
 
           <button
             type="submit"
             disabled={isLoading || !inputText.trim()}
-            className="p-2.5 rounded-xl bg-orange-500 text-black font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-orange-400 transition-colors"
+            className="border border-[#D95D24] bg-[#D95D24] p-2.5 text-[#111111] transition-colors hover:bg-[#C44E19] disabled:cursor-not-allowed disabled:opacity-40"
             title="Send"
           >
             <Send size={15} />
@@ -228,4 +229,3 @@ export default function OrbitAgentView({ activeChatId }) {
     </div>
   );
 }
-

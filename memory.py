@@ -21,7 +21,18 @@ MAX_CONTEXT_TOKENS = 1800
 MAX_MEMORY_TEXT = 500
 MAX_RETRIEVED_MEMORIES = 5
 HABIT_COMPLETION_XP = 10
-LOCAL_TIMEZONE = ZoneInfo("Asia/Kolkata")
+
+
+def _resolve_local_timezone() -> ZoneInfo:
+    tz_name = os.environ.get("SPIDEY_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        LOGGER.warning("Invalid SPIDEY_TIMEZONE %r; falling back to Asia/Kolkata", tz_name)
+        return ZoneInfo("Asia/Kolkata")
+
+
+LOCAL_TIMEZONE = _resolve_local_timezone()
 
 
 def _now() -> str:
@@ -505,6 +516,15 @@ class MemoryStore:
             (xp, json.dumps(sorted(valid_dates)), json.dumps(sorted(achievements)), _now()),
         )
 
+    def award_xp(self, amount: int, reason: str = "") -> dict[str, Any]:
+        """Award (or deduct) XP and refresh gamification state."""
+        with self.connect() as connection:
+            self._refresh_gamification(connection, xp_delta=int(amount))
+            data = self._get_gamification(connection)
+        if reason:
+            LOGGER.info("Awarded %d XP (%s). Total XP: %d", amount, reason, data["xp"])
+        return {"xp": data["xp"], "awarded": int(amount), "reason": reason}
+
     def list_habits(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
             habits = connection.execute("SELECT * FROM habits ORDER BY id").fetchall()
@@ -834,40 +854,89 @@ class MemoryStore:
         return result.rowcount > 0
 
     def search_memories(self, query: str, limit: int = MAX_RETRIEVED_MEMORIES) -> list[dict[str, Any]]:
+        ranked_by_id: dict[Any, tuple[float, dict[str, Any]]] = {}
+
         query_embedding = self.embed(query)
         if query_embedding is not None:
+            q_len = len(query_embedding)
+            query_norm = sum(value * value for value in query_embedding) ** 0.5
             with self.connect() as connection:
                 rows = connection.execute(
                     "SELECT id, content, embedding, created_at, updated_at "
                     "FROM memories WHERE embedding IS NOT NULL"
                 ).fetchall()
-            ranked = []
-            query_norm = sum(value * value for value in query_embedding) ** 0.5
             for row in rows:
-                values = json.loads(row["embedding"])
+                try:
+                    values = json.loads(row["embedding"])
+                except Exception:
+                    continue
+                if not isinstance(values, list) or len(values) != q_len:
+                    continue
                 denominator = query_norm * (sum(value * value for value in values) ** 0.5)
-                score = sum(a * b for a, b in zip(query_embedding, values)) / denominator if denominator else 0
-                ranked.append((score, dict(row)))
-            ranked.sort(key=lambda item: item[0], reverse=True)
-            return [item[1] for item in ranked if item[0] >= 0.35][:limit]
+                score = sum(a * b for a, b in zip(query_embedding, values)) / denominator if denominator else 0.0
+                if score >= 0.35:
+                    item = dict(row)
+                    item["score"] = float(score)
+                    ranked_by_id[item["id"]] = (float(score), item)
 
-        terms = set(re.findall(r"[a-z0-9]+", query.lower()))
-        if not terms:
-            return []
-        scored: list[tuple[int, dict[str, Any]]] = []
+        # Hybrid lexical + semantic-concept fallback across ALL memories (including NULL or mismatched embeddings)
+        stop_words = {
+            "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
+            "is", "are", "was", "were", "be", "been", "being", "do", "does", "did",
+            "have", "has", "had", "the", "a", "an", "of", "to", "in", "on", "for",
+            "with", "about", "from", "by", "at", "as", "into", "my", "me", "i",
+            "you", "your", "kind", "type", "tell", "know", "saved", "remember",
+        }
+        concept_groups = [
+            {"food", "dish", "dishes", "meal", "meals", "eat", "eating", "cuisine", "snack", "breakfast", "lunch", "dinner", "biryani", "chicken", "spicy", "restaurant"},
+            {"like", "likes", "love", "loves", "favorite", "favourite", "prefer", "prefers", "enjoy", "enjoys", "fond"},
+            {"laptop", "pc", "computer", "hardware", "specs", "gpu", "cpu", "ram", "asus", "tuf", "ryzen", "rtx", "machine"},
+            {"skill", "skills", "tech", "stack", "programming", "language", "languages", "framework", "frameworks", "code", "coding", "developer", "react", "python", "javascript"},
+            {"startup", "business", "company", "venture", "lighthouse", "client", "clients"},
+            {"project", "projects", "app", "apps", "application", "applications", "built", "building", "developing", "kage"},
+            {"study", "studies", "education", "college", "diploma", "degree", "student", "course", "branch"},
+            {"goal", "goals", "aim", "ambition", "future", "career", "plan"},
+            {"name", "called", "identity", "who"},
+        ]
+
+        raw_terms = set(re.findall(r"[a-z0-9]+", query.lower()))
+        meaningful_terms = raw_terms - stop_words
+        if not meaningful_terms:
+            meaningful_terms = raw_terms
+
+        # Expand query terms with concept synonyms
+        expanded_terms = set(meaningful_terms)
+        for group in concept_groups:
+            if meaningful_terms & group:
+                expanded_terms |= group
+
         for memory in self.list_memories():
-            memory_terms = set(re.findall(r"[a-z0-9]+", memory["content"].lower()))
-            score = len(terms & memory_terms)
-            if score:
-                scored.append((score, memory))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return [memory for _, memory in scored[:limit]]
+            mem_id = memory["id"]
+            mem_terms = set(re.findall(r"[a-z0-9]+", memory["content"].lower()))
+            exact_hits = len(meaningful_terms & mem_terms)
+            concept_hits = len(expanded_terms & mem_terms)
+            if exact_hits == 0 and concept_hits == 0:
+                continue
+            lex_score = exact_hits * 0.25 + concept_hits * 0.12
+            existing = ranked_by_id.get(mem_id)
+            if existing is None or lex_score > existing[0]:
+                mem_copy = dict(memory)
+                mem_copy["score"] = round(max(lex_score, existing[0] if existing else 0.0), 3)
+                ranked_by_id[mem_id] = (mem_copy["score"], mem_copy)
+
+        ranked_list = sorted(ranked_by_id.values(), key=lambda item: item[0], reverse=True)
+        return [item[1] for item in ranked_list[:limit]]
 
     def embed(self, text: str) -> list[float] | None:
         if os.environ.get("AI_ENABLE_SEMANTIC_MEMORY", "1") == "0":
             return None
         if self._embedder is not None:
-            return self._embedder.encode(text, normalize_embeddings=True).tolist()
+            try:
+                return self._embedder.encode(text, normalize_embeddings=True).tolist()
+            except Exception:
+                pass
+
+        # 1. Try in-process model registry first (fast, no Ollama VRAM swap)
         try:
             from runtime.models import REGISTRY
             if REGISTRY.is_ready("embedder"):
@@ -875,8 +944,30 @@ class MemoryStore:
                 return self._embedder.encode(text, normalize_embeddings=True).tolist()
         except Exception:
             pass
+
+        # 2. Optional Ollama embedding endpoint (only if explicitly enabled via AI_OLLAMA_EMBEDDINGS=1
+        # to prevent unloading/swapping the main chat LLM on single-GPU machines)
+        if os.environ.get("AI_OLLAMA_EMBEDDINGS", "0") == "1" and not getattr(self, "_ollama_embed_failed", False):
+            try:
+                ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+                embed_model = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text").strip()
+                payload = json.dumps({"model": embed_model, "prompt": text}).encode("utf-8")
+                import urllib.request
+                req = urllib.request.Request(
+                    f"{ollama_url}/api/embeddings",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if "embedding" in data and isinstance(data["embedding"], list):
+                        return data["embedding"]
+            except Exception:
+                self._ollama_embed_failed = True
+
         if not self._embedding_warning_printed:
-            LOGGER.info("Semantic memory model unavailable; using keyword retrieval.")
+            LOGGER.info("Semantic memory model unavailable; using hybrid lexical-concept retrieval.")
             self._embedding_warning_printed = True
         return None
 

@@ -1,29 +1,36 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertTriangle, X } from 'lucide-react';
 
 const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, type = 'danger', confirmString }) => {
     const [inputValue, setInputValue] = useState('');
 
-    // Reset input when modal opens
-    if (!isOpen && inputValue) setInputValue('');
+    // Reset input when modal opens/closes
+    useEffect(() => {
+        if (!isOpen) {
+            setInputValue('');
+        }
+    }, [isOpen]);
 
-    // If confirmation string is required, check match
-    const isConfirmDisabled = confirmString && inputValue !== confirmString;
+    // Case-insensitive, whitespace-trimmed comparison for user convenience
+    const isConfirmDisabled = Boolean(
+        confirmString &&
+        inputValue.trim().toLowerCase() !== confirmString.trim().toLowerCase()
+    );
 
     if (!isOpen) return null;
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4">
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="glass-card w-full max-w-sm border border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] p-6 relative overflow-hidden"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                    className="glass-card relative w-full max-w-sm overflow-hidden border border-[#F2EFE9]/20 bg-[#141414] p-6"
                 >
-                    {/* Background Glow */}
-                    <div className={`absolute top-0 left-0 w-full h-1 ${type === 'danger' ? 'bg-red-500' : 'bg-primary'}`} />
+                    <div className={`absolute top-0 left-0 h-[2px] w-full ${type === 'danger' ? 'bg-[#D95D24]' : 'bg-[#F2EFE9]'}`} />
 
                     <button
                         onClick={onClose}
@@ -50,6 +57,14 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, type = 
                                         type="text"
                                         value={inputValue}
                                         onChange={(e) => setInputValue(e.target.value)}
+                                        onKeyDown={async (e) => {
+                                            if (e.key === 'Enter' && !isConfirmDisabled) {
+                                                e.preventDefault();
+                                                await onConfirm();
+                                                onClose();
+                                            }
+                                        }}
+                                        autoFocus
                                         className="w-full bg-black/30 border border-white/10 rounded px-3 py-2 text-center text-white text-sm font-mono focus:border-white/30 outline-none transition-colors"
                                         placeholder={confirmString}
                                     />
@@ -65,8 +80,8 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, type = 
                                 Cancel
                             </button>
                             <button
-                                onClick={() => {
-                                    onConfirm();
+                                onClick={async () => {
+                                    await onConfirm();
                                     onClose();
                                 }}
                                 disabled={isConfirmDisabled}

@@ -212,7 +212,7 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
     stt_engine = stt.get_stt()
     tts_engine = tts.get_tts_engine()
 
-    mode = "listen"
+    mode = "live"
     chat_id: str | None = None
     is_speaking = False
     speech_detected = False
@@ -291,6 +291,7 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
         await send_state(session.VState.THINKING)
         handler = get_chat_handler()
         reply_text = ""
+        chat_res: dict[str, Any] = {}
         if handler:
             try:
                 chat_res = await handler(transcript, chat_id)
@@ -304,7 +305,18 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
             await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
             return
 
-        await websocket.send_text(json.dumps({"type": "reply", "text": reply_text}))
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "reply",
+                    "text": reply_text,
+                    "chat_id": chat_res.get("chat_id") or chat_id,
+                    "messages": chat_res.get("messages"),
+                    "navigate": chat_res.get("navigate"),
+                    "ui_actions": chat_res.get("ui_actions"),
+                }
+            )
+        )
 
         # 3. Speak
         await speak_sentences(reply_text)
@@ -328,11 +340,14 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
 
                 msg_type = payload.get("type")
                 if msg_type == "start":
-                    mode = payload.get("mode", "listen")
+                    mode = payload.get("mode", "live")
                     chat_id = payload.get("chat_id")
                     voice_sess.reset()
                     speech_detected = False
                     await send_state(session.VState.LISTENING)
+
+                elif msg_type == "set_chat":
+                    chat_id = payload.get("chat_id")
 
                 elif msg_type == "stop":
                     voice_sess.reset()
@@ -378,10 +393,14 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                     elif (now - silence_start_time) * 1000 >= config.VAD_TRAILING_SILENCE_MS:
                         # Ensure minimum speech length was satisfied
                         if (now - speech_start_time) * 1000 >= config.VAD_MIN_SPEECH_MS:
+                            speech_detected = False
+                            silence_start_time = 0.0
+                            voice_sess.state = session.VState.TRANSCRIBING
                             task = asyncio.create_task(process_utterance())
                             voice_sess.tasks.add(task)
                         else:
                             speech_detected = False
+                            silence_start_time = 0.0
                             voice_sess.pcm.clear()
 
     except (WebSocketDisconnect, RuntimeError):

@@ -181,8 +181,11 @@ const Settings = () => {
 
     return (
         <div className="max-w-2xl mx-auto pb-20 relative">
-            <h1 className="text-3xl font-bold text-white uppercase tracking-widest glow-white mb-2">Settings</h1>
-            <p className="text-textMuted text-xs font-mono mb-8">Make this space feel like yours.</p>
+            <header className="mb-8 border-b border-[#F2EFE9]/15 pb-5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">07 · Configuration</span>
+                <h1 className="mt-1 text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9]">Settings</h1>
+                <p className="mt-1 font-mono text-xs text-[#9C968E]">Make this space feel like yours.</p>
+            </header>
 
             <SettingSection title="Appearance">
                 <div className="flex items-center justify-between p-4">

@@ -54,13 +54,13 @@ const TaskEditor = ({ task, onSave, onCancel }) => {
     };
 
     return (
-        <section ref={panelRef} className="glass-card">
-            <div className="flex items-start justify-between gap-3">
+        <section ref={panelRef} className="border border-[#F2EFE9]/15 bg-[#151515] p-5">
+            <div className="flex items-start justify-between gap-3 border-b border-[#F2EFE9]/10 pb-3">
                 <div>
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-textMuted">
+                    <p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#9C968E]">
                         {isEditing ? 'Editing task' : 'New task'}
                     </p>
-                    <h2 className="mt-1 text-lg font-bold text-white">
+                    <h2 className="mt-1 text-base font-bold uppercase tracking-[0.1em] text-[#F2EFE9]">
                         {isEditing ? 'Task details' : 'Add a task'}
                     </h2>
                 </div>
@@ -68,7 +68,7 @@ const TaskEditor = ({ task, onSave, onCancel }) => {
                     <button
                         type="button"
                         onClick={onCancel}
-                        className="text-textMuted hover:text-white transition-colors p-1"
+                        className="p-1 text-[#9C968E] transition-colors hover:text-[#F2EFE9]"
                         aria-label="Stop editing this task"
                     >
                         <X size={16} />
@@ -77,14 +77,14 @@ const TaskEditor = ({ task, onSave, onCancel }) => {
             </div>
 
             {isEditing && (
-                <p className="mt-3 truncate rounded-lg border border-orange-400/20 bg-orange-500/10 px-3 py-2 text-xs text-orange-200">
+                <p className="mt-3 truncate border border-[#D95D24]/40 bg-[#1B1612] px-3 py-2 font-mono text-xs text-[#F2EFE9]">
                     #{task.id} · {task.title}
                 </p>
             )}
 
-            <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+            <form onSubmit={handleSubmit} className="mt-4 space-y-4">
                 <div>
-                    <label className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-textMuted" htmlFor="task-title">Title</label>
+                    <label className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#9C968E]" htmlFor="task-title">Title</label>
                     <input
                         id="task-title"
                         type="text"
@@ -93,31 +93,31 @@ const TaskEditor = ({ task, onSave, onCancel }) => {
                         onChange={updateField('title')}
                         maxLength={500}
                         placeholder="What needs doing?"
-                        className="w-full rounded-lg border border-white/10 bg-surfaceHighlight px-3 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:border-orange-400/40 focus:outline-none"
+                        className="w-full border border-[#F2EFE9]/15 bg-[#111111] px-3 py-2.5 text-sm text-[#F2EFE9] placeholder:text-[#9C968E]/50 focus:border-[#D95D24] focus:outline-none"
                     />
                 </div>
 
                 <div>
-                    <label className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-textMuted" htmlFor="task-desc">Description</label>
+                    <label className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#9C968E]" htmlFor="task-desc">Description</label>
                     <textarea
                         id="task-desc"
                         value={form.description}
                         onChange={updateField('description')}
                         maxLength={2000}
-                        rows={4}
+                        rows={3}
                         placeholder="Add a note, if it helps..."
-                        className="w-full resize-y rounded-lg border border-white/10 bg-surfaceHighlight px-3 py-2.5 text-sm text-white placeholder:text-neutral-600 focus:border-orange-400/40 focus:outline-none"
+                        className="w-full resize-y border border-[#F2EFE9]/15 bg-[#111111] px-3 py-2.5 text-sm text-[#F2EFE9] placeholder:text-[#9C968E]/50 focus:border-[#D95D24] focus:outline-none"
                     />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                     <div>
-                        <label className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-textMuted" htmlFor="task-priority">Priority</label>
+                        <label className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#9C968E]" htmlFor="task-priority">Priority</label>
                         <select
                             id="task-priority"
                             value={form.priority}
                             onChange={updateField('priority')}
-                            className="w-full rounded-lg border border-white/10 bg-surfaceHighlight px-2 py-2.5 text-xs text-white focus:border-orange-400/40 focus:outline-none"
+                            className="w-full border border-[#F2EFE9]/15 bg-[#111111] px-2.5 py-2.5 font-mono text-xs text-[#F2EFE9] focus:border-[#D95D24] focus:outline-none"
                         >
                             <option value="low">LOW</option>
                             <option value="medium">MEDIUM</option>
@@ -125,25 +125,25 @@ const TaskEditor = ({ task, onSave, onCancel }) => {
                         </select>
                     </div>
                     <div>
-                        <label className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-textMuted" htmlFor="task-due">Due date</label>
+                        <label className="mb-1.5 block font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#9C968E]" htmlFor="task-due">Due date</label>
                         <input
                             id="task-due"
                             type="date"
                             value={form.dueDate}
                             onChange={updateField('dueDate')}
-                            className="w-full rounded-lg border border-white/10 bg-surfaceHighlight px-2 py-2.5 text-xs text-white focus:border-orange-400/40 focus:outline-none [color-scheme:dark]"
+                            className="w-full border border-[#F2EFE9]/15 bg-[#111111] px-2.5 py-2.5 font-mono text-xs text-[#F2EFE9] focus:border-[#D95D24] focus:outline-none [color-scheme:dark]"
                         />
                     </div>
                 </div>
 
                 {error && (
-                    <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">{error}</p>
+                    <p className="border border-[#D95D24] bg-[#1E130F] p-3 font-mono text-xs text-[#F2EFE9]">{error}</p>
                 )}
 
                 <button
                     type="submit"
                     disabled={!form.title.trim() || saving}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-white py-3 text-xs font-bold uppercase tracking-wider text-black transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex w-full items-center justify-center gap-2 border border-[#D95D24] bg-[#D95D24] py-3 font-mono text-xs font-bold uppercase tracking-[0.16em] text-[#111111] transition-colors hover:bg-[#C44E19] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                     {isEditing ? <Check size={14} /> : <Plus size={14} />}
                     {saving ? 'Saving...' : isEditing ? 'Save changes' : 'Create task'}
