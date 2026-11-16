@@ -19,15 +19,11 @@ dateparser
 regex
 tavily-python
 
-# Voice Stack (Gradium Phonon CPU TTS + SpeechRecognition STT)
+# Voice stack (Gradium Phonon CPU TTS + SpeechRecognition STT)
 ptts
 SpeechRecognition
 soundfile
 numpy
-
-# Semantic Memory Embeddings
-torch
-sentence-transformers
 
 # Discord Bot Integration
 discord.py

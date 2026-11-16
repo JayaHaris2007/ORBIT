@@ -1,6 +1,6 @@
 # S.P.I.D.E.Y. (ORBIT007) — Local AI Assistant
 
-S.P.I.D.E.Y. is a 100% local personal AI assistant and productivity workbench featuring a **Three.js 3D Neural Core**, a **Swiss-editorial pen-plotter interface**, **real-time token streaming** powered by **Ollama (`qwen3.5:4b`)**, **continuous hands-free voice discussion**, **semantic memory**, and **Discord integration**.
+S.P.I.D.E.Y. is a 100% local personal AI assistant and productivity workbench featuring a **Three.js 3D Neural Core**, a **Swiss-editorial pen-plotter interface**, **real-time token streaming** powered by **Ollama (`qwen3.5:4b`)**, **continuous hands-free voice discussion**, **hybrid memory recall**, and **Discord integration**.
 
 ---
 
@@ -30,7 +30,7 @@ ollama --version
 - **LLM Brain:** Local [Ollama](https://ollama.com) (`qwen3.5:4b`, native tool calling + token streaming)
 - **Voice TTS:** Gradium Phonon (`phonon-31m-en` via `ptts` on CPU) with automatic Windows SAPI fallback
 - **Voice STT:** Local Whisper / `SpeechRecognition` with continuous VAD & barge-in support
-- **Backend:** Python FastAPI, SQLite (WAL mode), APScheduler, `sentence-transformers` semantic memory
+- **Backend:** Python FastAPI, SQLite (WAL mode), APScheduler, built-in hybrid lexical-concept memory (no PyTorch or embedding model required)
 - **Frontend:** React 19, Vite, Tailwind CSS v4, Three.js (3D Particle Sphere), Framer Motion
 
 ---

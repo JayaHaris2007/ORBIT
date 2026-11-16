@@ -9,8 +9,6 @@ import time
 import warnings
 from typing import Any
 
-import torch
-
 from .models import REGISTRY
 
 log = logging.getLogger("spidey.loaders")
@@ -21,6 +19,10 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="pydub.utils")
 
 def get_gpu_memory_gib() -> tuple[float, float]:
     """Return (allocated_gib, free_gib) for cuda:0, or (0.0, 0.0) if unavailable."""
+    try:
+        import torch
+    except ImportError:
+        return 0.0, 0.0
     if not torch.cuda.is_available():
         return 0.0, 0.0
     try:
