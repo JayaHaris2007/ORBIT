@@ -4,10 +4,29 @@ S.P.I.D.E.Y. is a 100% local personal AI assistant and productivity workbench fe
 
 ---
 
-## Prerequisites & Tech Stack
+## Required Software & Exact Versions
 
-- **Python:** **Python 3.11 – 3.15** (Recommended: **Python 3.14** on Windows for prebuilt wheels of `torch`, `pydantic-core`, `numpy`, and `regex`; Python `3.15` is also supported)
-- **Node.js:** **Node.js 18+** (with `npm`)
+Verified working environment:
+
+| Software | Tested / Exact Version | Minimum Supported | Download |
+|----------|------------------------|-------------------|----------|
+| **Python** | **Python 3.15.2** | Python 3.11+ (`3.14` / `3.15.2`) | [python.org](https://www.python.org/downloads/) |
+| **Node.js & npm** | **Node.js v26.13.0** (`npm 11.20.0`) | Node.js 18+ | [nodejs.org](https://nodejs.org/) |
+| **Ollama** | **Ollama 0.40.16** (`qwen3.5:4b`) | Latest Ollama | [ollama.com](https://ollama.com/) |
+
+Check your installed versions before starting:
+
+```powershell
+python --version
+node --version
+npm --version
+ollama --version
+```
+
+---
+
+## Tech Stack
+
 - **LLM Brain:** Local [Ollama](https://ollama.com) (`qwen3.5:4b`, native tool calling + token streaming)
 - **Voice TTS:** Gradium Phonon (`phonon-31m-en` via `ptts` on CPU) with automatic Windows SAPI fallback
 - **Voice STT:** Local Whisper / `SpeechRecognition` with continuous VAD & barge-in support
@@ -18,44 +37,36 @@ S.P.I.D.E.Y. is a 100% local personal AI assistant and productivity workbench fe
 
 ## Step-by-Step Setup (Clone → Install → Run)
 
-### 1. Clone the Repository
+### 1. Clone the Repository (`master` branch)
 
 ```powershell
-git clone <your-repository-url> Spidey
-cd Spidey
+git clone https://github.com/JayaHaris2007/ORBIT007.git
+cd ORBIT007
 ```
 
-### 2. Install & Start Ollama
+### 2. Install & Start Ollama (`0.40.16`)
 
-Install [Ollama](https://ollama.com), then pull the default local model:
+Install [Ollama](https://ollama.com), then pull the default local model and start the service:
 
 ```powershell
 ollama pull qwen3.5:4b
 ollama serve
 ```
 
-### 3. Create Python Virtual Environment & Install `requirements.txt`
-
-Requires **Python 3.11+** (**Python 3.14** recommended on Windows; **Python 3.15** also supported). Check your version first:
-
-```powershell
-python --version
-```
-
-Create `.venv` and install all dependencies from `requirements.txt`:
+### 3. Create Python Virtual Environment (`3.15.2`) & Install `requirements.txt`
 
 ```powershell
 python -m venv .venv
-# Or to target Python 3.14 explicitly on Windows: py -3.14 -m venv .venv
-
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### 4. Install Frontend Dependencies
+### 4. Install Frontend Dependencies (`Node.js v26.13.0` / `npm 11.20.0`)
 
 ```powershell
-npm --prefix frontend install
+cd frontend
+npm i
+cd ..
 ```
 
 ### 5. Configure Environment Variables (`.env`)
