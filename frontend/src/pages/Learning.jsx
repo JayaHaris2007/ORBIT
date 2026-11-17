@@ -124,7 +124,7 @@ const Learning = () => {
     }
 
     return (
-        <div className="space-y-8 pb-20">
+        <div data-spidey-section="learning" className="space-y-8 pb-20">
             <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#F2EFE9]/15 pb-5">
                 <div>
                     <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">05 · Mastery</span>

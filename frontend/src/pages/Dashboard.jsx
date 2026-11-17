@@ -230,7 +230,7 @@ const Dashboard = () => {
                 className="grid grid-cols-1 items-start gap-8 md:grid-cols-2 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_320px]"
             >
                 {/* Habits Section */}
-                <section>
+                <section data-spidey-section="habits">
                     <PlotterSectionHeader
                         index="01"
                         title={focusMode ? 'Pending Habits' : 'Daily Habits'}
@@ -262,7 +262,7 @@ const Dashboard = () => {
                 </section>
 
                 {/* Tasks Section */}
-                <section>
+                <section data-spidey-section="tasks">
                     <PlotterSectionHeader
                         index="02"
                         title={focusMode ? 'Priority Queue' : 'Active Tasks'}

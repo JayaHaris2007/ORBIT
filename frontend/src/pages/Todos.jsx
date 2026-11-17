@@ -108,7 +108,13 @@ const Todos = () => {
         }
     }
 
-    if (loading) return <div className="p-10 text-center animate-pulse text-textMuted">Loading your tasks...</div>;
+    if (loading) {
+        return (
+            <div className="py-16 text-center font-mono text-xs uppercase tracking-[0.18em] text-[#9C968E] animate-pulse">
+                Loading your tasks...
+            </div>
+        );
+    }
 
     return (
         <div className="pb-20">
@@ -131,36 +137,43 @@ const Todos = () => {
             <div className="grid grid-cols-1 items-start gap-6 2xl:grid-cols-[minmax(0,1fr)_340px]">
                 <div className="min-w-0">
                     {/* Controls */}
-                    <div className="flex flex-col md:flex-row gap-4 mb-6">
-                        <div className="relative flex-1">
-                            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-textMuted" size={18} />
+                    <div className="mb-6 flex flex-col gap-3">
+                        <div className="relative w-full">
+                            <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#9C968E]" size={16} />
                             <input
                                 type="text"
                                 placeholder="Search your tasks..."
-                                className="w-full bg-surfaceHighlight border border-white/5 rounded-lg py-2 pl-10 pr-4 text-white focus:outline-none focus:border-white/30 transition-all placeholder:text-neutral-700"
+                                className="w-full border border-[#F2EFE9]/15 bg-[#151515] py-2.5 pl-10 pr-4 font-mono text-xs text-[#F2EFE9] placeholder:text-[#9C968E]/60 transition-colors focus:border-[#D95D24] focus:outline-none"
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
                             />
                         </div>
 
-                        <div className="flex flex-wrap bg-surfaceHighlight p-1 rounded-lg border border-white/5">
-                            {['all', 'pending', 'completed', 'high'].map((f) => (
+                        <div className="flex flex-wrap items-center gap-1 border border-[#F2EFE9]/15 bg-[#151515] p-1">
+                            {[
+                                { id: 'all', label: 'All' },
+                                { id: 'pending', label: 'Pending' },
+                                { id: 'completed', label: 'Completed' },
+                                { id: 'high', label: 'High Priority' },
+                            ].map((opt) => (
                                 <button
-                                    key={f}
-                                    onClick={() => setFilter(f)}
-                                    className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-all ${filter === f
-                                        ? 'bg-white text-black shadow-sm'
-                                        : 'text-textMuted hover:text-white'
-                                        }`}
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() => setFilter(opt.id)}
+                                    className={`flex-1 whitespace-nowrap px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${
+                                        filter === opt.id
+                                            ? 'bg-[#D95D24] text-[#111111]'
+                                            : 'text-[#9C968E] hover:bg-[#1D1D1D] hover:text-[#F2EFE9]'
+                                    }`}
                                 >
-                                    {f === 'high' ? 'High Priority' : f}
+                                    {opt.label}
                                 </button>
                             ))}
                         </div>
                     </div>
 
                     {/* Task List */}
-                    <div className="space-y-3">
+                    <div data-spidey-section="tasks" className="space-y-3">
                         <AnimatePresence>
                             {sortedTasks.map(task => (
                                 <TaskCard
@@ -177,7 +190,7 @@ const Todos = () => {
                         </AnimatePresence>
 
                         {sortedTasks.length === 0 && (
-                            <div className="text-center py-20 text-textMuted italic">
+                            <div className="border border-[#F2EFE9]/14 bg-[#151515] py-16 text-center font-mono text-xs uppercase tracking-[0.14em] text-[#9C968E]">
                                 Nothing here yet. You&apos;re doing great.
                             </div>
                         )}

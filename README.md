@@ -1,6 +1,6 @@
 # S.P.I.D.E.Y. (ORBIT007) — Local AI Assistant
 
-S.P.I.D.E.Y. is a 100% local personal AI assistant and productivity workbench featuring a **Three.js 3D Neural Core**, a **Swiss-editorial pen-plotter interface**, **real-time token streaming** powered by **Ollama (`qwen3.5:4b`)**, **continuous hands-free voice discussion**, **hybrid memory recall**, and **Discord integration**.
+S.P.I.D.E.Y. is a 100% local personal AI assistant and productivity workbench featuring a **Three.js 3D Neural Core**, an **autonomous 3D roaming S.P.I.D.E.Y. companion**, a **Swiss-editorial pen-plotter interface**, **real-time token streaming** powered by **Ollama (`qwen3.5:4b`)**, **continuous hands-free voice discussion**, **hybrid memory recall**, and **Discord integration**.
 
 ---
 
@@ -31,7 +31,7 @@ ollama --version
 - **Voice TTS:** Gradium Phonon (`phonon-31m-en` via `ptts` on CPU) with automatic Windows SAPI fallback
 - **Voice STT:** Local Whisper / `SpeechRecognition` with continuous VAD & barge-in support
 - **Backend:** Python FastAPI, SQLite (WAL mode), APScheduler, built-in hybrid lexical-concept memory (no PyTorch or embedding model required)
-- **Frontend:** React 19, Vite, Tailwind CSS v4, Three.js (3D Particle Sphere), Framer Motion
+- **Frontend:** React 19, Vite, Tailwind CSS v4, Three.js (3D Particle Sphere + Animated GLB Companion), Framer Motion
 
 ---
 
@@ -152,8 +152,13 @@ Then open **http://localhost:5173** in your browser.
 | `03` | `/todos` | **Tasks** | Priority task management with search, filters, due dates, and AI-driven updates |
 | `04` | `/reminders` | **Reminders & Memory** | Scheduled reminders (one-time & recurring) + long-term semantic memories |
 | `05` | `/learning` | **Learning** | Structured study roadmaps, topic status tracking, and AI study suggestions |
-| `06` | `/analytics` | **Analytics** | Weekly completion rates, streaks, yearly heatmap, and monthly/weekday charts |
+| `06` | `/analytics` | **Analytics** | Total Productivity % (habits, tasks, learning), per-roadmap learning progress, streaks, yearly heatmap, and charts |
 | `07` | `/settings` | **Settings** | Theme selection (Dark / Midnight / Light), profile, notifications, and data controls |
+
+### Interactive 3D Companion
+- **Top-Down Page Crawler:** S.P.I.D.E.Y.'s animated 3D GLB model (`spidey-ai-companion-animated.glb`) patrols across the workspace, traveling both over and underneath UI cards/sections.
+- **Tool-Calling Mission Animation:** When you ask S.P.I.D.E.Y. to mark a habit or task done, the backend completes it as usual while the 3D companion crawls to that section/card and stamps it done.
+- **Petting & Click Reactions:** Pet the spider with your mouse or click it to trigger `Happy_Bounce` / `Front_Wave` animations and playful speech responses.
 
 ---
 

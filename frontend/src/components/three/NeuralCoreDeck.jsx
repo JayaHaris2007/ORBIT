@@ -113,22 +113,16 @@ export default function NeuralCoreDeck({
 
             {/* Merged Split Grid: Left 3D Sphere / Right Personal Status & Controls */}
             <div className="grid grid-cols-1 lg:grid-cols-[340px_minmax(0,1fr)] lg:divide-x lg:divide-[#F2EFE9]/15">
-                {/* Left: 3D Particle Sphere + Spider Mark */}
+                {/* Left: Interactive 3D Neural Core */}
                 <div className="relative flex flex-col justify-between border-b border-[#F2EFE9]/15 bg-[#111111] p-4 lg:border-b-0">
                     <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <SpiderMark size={28} state={activeState} />
-                            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[#9C968E]">
-                                Three.js Cortex
-                            </span>
-                        </div>
-                        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#9C968E]">
-                            {meta.caption.split('.')[0]}
+                        <SpiderMark size={26} state={activeState} />
+                        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#9C968E]">
+                            Three.js Cortex
                         </span>
                     </div>
 
                     <div className="relative mx-auto my-2 flex h-[230px] w-full max-w-[290px] items-center justify-center">
-                        {/* Architectural hairline target rings */}
                         <div className="pointer-events-none absolute inset-4 rounded-full border border-[#F2EFE9]/10" />
                         <div className="pointer-events-none absolute inset-10 rounded-full border border-[#D95D24]/20" />
                         <NeuralBrainCanvas

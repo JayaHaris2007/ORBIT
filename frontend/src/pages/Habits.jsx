@@ -130,7 +130,7 @@ const Habits = () => {
                 </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6">
+            <div data-spidey-section="habits" className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6">
                 <AnimatePresence>
                     {habits.map(habit => (
                         <HabitCard

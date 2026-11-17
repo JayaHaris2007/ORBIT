@@ -11,6 +11,9 @@ const HabitCard = ({ habit, onToggle, onDelete, onEdit }) => {
     return (
         <motion.div
             layout
+            data-spidey-card="habit"
+            data-spidey-title={habit.name || habit.title || ''}
+            data-spidey-completed={isCompletedToday ? 'true' : 'false'}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}

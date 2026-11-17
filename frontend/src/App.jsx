@@ -14,6 +14,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import AssistantSidebar from './components/AssistantSidebar';
 import ParallaxStage from './components/ParallaxStage';
 import ScrollProgressLine from './components/ScrollProgressLine';
+import SpideyCrawlerOverlay from './components/three/SpideyCrawlerOverlay';
 
 const AppLayout = ({ children }) => {
     const { theme } = useTheme();
@@ -28,6 +29,7 @@ const AppLayout = ({ children }) => {
         </div>
         {/* S.P.I.D.E.Y is docked on the right on every page */}
         <AssistantSidebar />
+        <SpideyCrawlerOverlay />
     </div>;
 };
 

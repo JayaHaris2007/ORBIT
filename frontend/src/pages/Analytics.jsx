@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useAppData } from '../context/AppDataContext';
 import { habitService } from '../services/habitService';
+import { taskService } from '../services/taskService';
+import { learningService } from '../services/learningService';
 import { format, subDays } from 'date-fns';
 import { motion } from 'framer-motion';
-import { Flame, Calendar, Trophy, BarChart3, Grid, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Flame, Calendar, Trophy, BarChart3, Grid, ChevronLeft, ChevronRight, BookOpen, CheckSquare, Activity } from 'lucide-react';
 import YearlyHeatmap from '../components/analytics/YearlyHeatmap';
 import MonthlyChart from '../components/analytics/MonthlyChart';
 import WeekdayChart from '../components/analytics/WeekdayChart';
@@ -14,6 +16,8 @@ const Analytics = () => {
     const { currentUser } = useAuth();
     const { revision } = useAppData();
     const [habits, setHabits] = useState([]);
+    const [tasks, setTasks] = useState([]);
+    const [learningProgress, setLearningProgress] = useState(null);
     const [loading, setLoading] = useState(true);
     const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
 
@@ -28,15 +32,27 @@ const Analytics = () => {
     });
 
     useEffect(() => {
-        if (currentUser) {
-            habitService.getHabits().then((data) => {
-                setHabits(data);
+        if (!currentUser) return;
+        let active = true;
+        Promise.all([
+            habitService.getHabits().catch(() => []),
+            taskService.getTasks(true).catch(() => []),
+            learningService.getProgress().catch(() => null),
+        ])
+            .then(([habitData, taskData, progressData]) => {
+                if (!active) return;
+                setHabits(Array.isArray(habitData) ? habitData : []);
+                setTasks(Array.isArray(taskData) ? taskData : []);
+                setLearningProgress(progressData);
                 setLoading(false);
-            }).catch((error) => {
-                console.error('Error loading habits:', error);
-                setLoading(false);
+            })
+            .catch((error) => {
+                console.error('Error loading analytics:', error);
+                if (active) setLoading(false);
             });
-        }
+        return () => {
+            active = false;
+        };
     }, [currentUser, revision]);
 
     // Calculate overall completion rate for the week
@@ -75,6 +91,27 @@ const Analytics = () => {
     const weekdayStats = calculateWeekdayStats(habits);
     const yearlyTotal = calculateYearlyTotal(habits, selectedYear);
 
+    const habitRegularityPercent = getWeeklyCompletionRate();
+    const completedTasksCount = tasks.filter((t) => t.completed).length;
+    const totalTasksCount = tasks.length;
+    const taskCompletionPercent = totalTasksCount > 0 ? Math.round((completedTasksCount / totalTasksCount) * 100) : 0;
+
+    const totalTopicsCount = learningProgress?.topicCount ?? 0;
+    const completedTopicsCount = learningProgress?.completedTopics ?? 0;
+    const inProgressTopicsCount = learningProgress?.inProgressTopics ?? 0;
+    const learningPercent = Math.round(learningProgress?.completionPercent ?? 0);
+    const perRoadmap = learningProgress?.perRoadmap ?? [];
+
+    const activePillars = [
+        habits.length > 0 ? habitRegularityPercent : null,
+        totalTasksCount > 0 ? taskCompletionPercent : null,
+        totalTopicsCount > 0 ? learningPercent : null,
+    ].filter((v) => v !== null);
+
+    const totalProductivePercent = activePillars.length > 0
+        ? Math.round(activePillars.reduce((sum, val) => sum + val, 0) / activePillars.length)
+        : 0;
+
     return (
         <div className="space-y-8 pb-20">
             <header className="border-b border-[#F2EFE9]/15 pb-5">
@@ -83,6 +120,159 @@ const Analytics = () => {
                     Analytics
                 </h1>
             </header>
+
+            {/* Total Productive Percentage + 3 Pillars */}
+            <section className="grid grid-cols-1 gap-6 border border-[#F2EFE9]/15 bg-[#151515] p-6 lg:grid-cols-[300px_minmax(0,1fr)]">
+                <div className="flex flex-col justify-between border-b border-[#F2EFE9]/10 pb-6 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-6">
+                    <div>
+                        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">
+                            <Activity size={13} />
+                            <span>Total Productivity</span>
+                        </div>
+                        <div className="mt-3 flex items-baseline gap-2">
+                            <span className="font-mono text-5xl font-bold tracking-tight text-[#F2EFE9]">
+                                {totalProductivePercent}%
+                            </span>
+                            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#9C968E]">
+                                Composite
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className="mt-5">
+                        <div className="h-2 w-full bg-[#111111] border border-[#F2EFE9]/10">
+                            <div
+                                className="h-full bg-[#D95D24] transition-all duration-500"
+                                style={{ width: `${totalProductivePercent}%` }}
+                            />
+                        </div>
+                        <p className="mt-2 font-mono text-[10px] leading-relaxed text-[#9C968E]">
+                            Combined score across habit regularity, task completion, and learning progress.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <div className="flex flex-col justify-between border border-[#F2EFE9]/10 bg-[#111111] p-4">
+                        <div className="flex items-center justify-between">
+                            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#9C968E]">
+                                Habits Regular
+                            </span>
+                            <Flame size={14} className="text-[#D95D24]" />
+                        </div>
+                        <div className="my-3">
+                            <div className="font-mono text-2xl font-bold text-[#F2EFE9]">
+                                {habitRegularityPercent}%
+                            </div>
+                            <div className="mt-0.5 font-mono text-[10px] text-[#9C968E]">
+                                7-day consistency ({habits.length} active)
+                            </div>
+                        </div>
+                        <div className="h-1.5 w-full bg-[#1C1C1C]">
+                            <div
+                                className="h-full bg-[#D95D24] transition-all duration-500"
+                                style={{ width: `${habitRegularityPercent}%` }}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col justify-between border border-[#F2EFE9]/10 bg-[#111111] p-4">
+                        <div className="flex items-center justify-between">
+                            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#9C968E]">
+                                Task Completion
+                            </span>
+                            <CheckSquare size={14} className="text-[#D95D24]" />
+                        </div>
+                        <div className="my-3">
+                            <div className="font-mono text-2xl font-bold text-[#F2EFE9]">
+                                {taskCompletionPercent}%
+                            </div>
+                            <div className="mt-0.5 font-mono text-[10px] text-[#9C968E]">
+                                {completedTasksCount}/{totalTasksCount} tasks completed
+                            </div>
+                        </div>
+                        <div className="h-1.5 w-full bg-[#1C1C1C]">
+                            <div
+                                className="h-full bg-[#F2EFE9] transition-all duration-500"
+                                style={{ width: `${taskCompletionPercent}%` }}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col justify-between border border-[#F2EFE9]/10 bg-[#111111] p-4">
+                        <div className="flex items-center justify-between">
+                            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[#9C968E]">
+                                Learning Progress
+                            </span>
+                            <BookOpen size={14} className="text-[#D95D24]" />
+                        </div>
+                        <div className="my-3">
+                            <div className="font-mono text-2xl font-bold text-[#F2EFE9]">
+                                {learningPercent}%
+                            </div>
+                            <div className="mt-0.5 font-mono text-[10px] text-[#9C968E]">
+                                {completedTopicsCount}/{totalTopicsCount} topics mastered
+                            </div>
+                        </div>
+                        <div className="h-1.5 w-full bg-[#1C1C1C]">
+                            <div
+                                className="h-full bg-[#D95D24] transition-all duration-500"
+                                style={{ width: `${learningPercent}%` }}
+                            />
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            {/* Learning Progress Breakdown */}
+            <section data-spidey-section="learning" className="border border-[#F2EFE9]/15 bg-[#151515] p-6">
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-[#F2EFE9]/10 pb-4">
+                    <div className="flex items-center gap-2">
+                        <BookOpen size={15} className="text-[#D95D24]" />
+                        <h3 className="font-mono text-xs font-bold uppercase tracking-[0.18em] text-[#F2EFE9]">
+                            Learning Progress
+                        </h3>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] uppercase tracking-[0.14em] text-[#9C968E]">
+                        <span>{learningProgress?.roadmapCount ?? 0} Roadmaps</span>
+                        <span>{inProgressTopicsCount} In Progress</span>
+                        <span className="text-[#D95D24] font-bold">{completedTopicsCount}/{totalTopicsCount} Done</span>
+                    </div>
+                </div>
+
+                {perRoadmap.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        {perRoadmap.map((rm) => {
+                            const pct = Math.round(rm.percent ?? 0);
+                            return (
+                                <div key={rm.roadmapId} className="border border-[#F2EFE9]/10 bg-[#111111] p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <span className="truncate text-sm font-semibold text-[#F2EFE9]">
+                                            {rm.roadmapName}
+                                        </span>
+                                        <span className="shrink-0 font-mono text-xs font-bold text-[#D95D24]">
+                                            {pct}%
+                                        </span>
+                                    </div>
+                                    <div className="mt-2.5 h-1.5 w-full bg-[#1C1C1C]">
+                                        <div
+                                            className="h-full bg-[#D95D24] transition-all duration-500"
+                                            style={{ width: `${pct}%` }}
+                                        />
+                                    </div>
+                                    <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#9C968E]">
+                                        {rm.completed} of {rm.total} topics completed
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                ) : (
+                    <p className="border-l border-[#D95D24] py-2 pl-4 font-mono text-xs text-[#9C968E]">
+                        No learning roadmaps tracked yet. Add a roadmap in Learning to track mastery here.
+                    </p>
+                )}
+            </section>
 
             {/* Overview Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-4 gap-6">

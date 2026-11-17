@@ -85,12 +85,15 @@ const AssistantSidebar = () => {
         if (route && location.pathname !== route) navigate(route);
     }, [navigate, location.pathname]);
 
-    const applyUiActions = useCallback((actions) => {
+    const applyUiActions = useCallback((actions, contextText = '') => {
         if (!Array.isArray(actions)) return;
+        const refreshSections = [];
         for (const action of actions) {
             if (!action || !action.type) continue;
             if (action.type === 'refresh') {
-                window.dispatchEvent(new CustomEvent('orbit:refresh', { detail: { sections: action.sections || [] } }));
+                const secs = Array.isArray(action.sections) ? action.sections : [];
+                refreshSections.push(...secs);
+                window.dispatchEvent(new CustomEvent('orbit:refresh', { detail: { sections: secs } }));
             } else if (action.type === 'navigate') {
                 const targetRoute = action.route || (action.page ? `/${action.page}` : null);
                 const allowed = ['/dashboard', '/habits', '/todos', '/reminders', '/learning', '/analytics', '/settings'];
@@ -102,6 +105,14 @@ const AssistantSidebar = () => {
             } else {
                 window.dispatchEvent(new CustomEvent('orbit:ui_action', { detail: action }));
             }
+        }
+        if (refreshSections.length > 0) {
+            window.dispatchEvent(new CustomEvent('spidey:crawler_action', {
+                detail: {
+                    sections: [...new Set(refreshSections)],
+                    text: contextText,
+                },
+            }));
         }
     }, [goToPage, location.pathname, navigate]);
 
@@ -143,7 +154,7 @@ const AssistantSidebar = () => {
             ]);
         }
         if (data?.navigate) goToPage(data.navigate);
-        if (data?.ui_actions) applyUiActions(data.ui_actions);
+        if (data?.ui_actions) applyUiActions(data.ui_actions, `${replyText || ''} ${data?.response || ''}`);
         refreshChats();
         refresh();
     }, [applyUiActions, goToPage, refresh, refreshChats]);
@@ -367,7 +378,7 @@ const AssistantSidebar = () => {
             const data = finalData;
             setMessages(data.messages || []);
             if (data.navigate) goToPage(data.navigate);
-            applyUiActions(data.ui_actions);
+            applyUiActions(data.ui_actions, `${value} ${data.response || ''}`);
             if (data.response && voice.speakEnabled && voiceSession.state === 'idle') {
                 voice.speak(data.response);
             } else {
@@ -490,7 +501,7 @@ const AssistantSidebar = () => {
                 {coreExpanded && (
                     <div className="shrink-0 border-b border-[#F2EFE9]/15 bg-[#131313] px-4 py-2">
                         <div className="flex items-center gap-3">
-                            <div className="h-[76px] w-[76px] shrink-0 border border-[#F2EFE9]/10 bg-[#111111]">
+                            <div className="h-[78px] w-[78px] shrink-0 border border-[#F2EFE9]/10 bg-[#111111]">
                                 <NeuralBrainCanvas
                                     size="compact"
                                     className="h-full w-full"

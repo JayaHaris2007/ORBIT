@@ -12,6 +12,9 @@ const TaskCard = ({ task, onToggle, onDelete, onEdit }) => {
     return (
         <motion.div
             layout
+            data-spidey-card="task"
+            data-spidey-title={task.title || ''}
+            data-spidey-completed={task.completed ? 'true' : 'false'}
             initial={{ opacity: 0, x: -8 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 8 }}
