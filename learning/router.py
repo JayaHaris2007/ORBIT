@@ -74,10 +74,61 @@ def create_roadmap(payload: schema.RoadmapIn = Body(...)) -> dict[str, Any]:
             "VALUES (?, ?, ?, ?)",
             (payload.name, payload.category, payload.description, _now()),
         )
+        roadmap_id = int(cursor.lastrowid)
         row = connection.execute(
-            "SELECT * FROM roadmaps WHERE id = ?", (cursor.lastrowid,)
+            "SELECT * FROM roadmaps WHERE id = ?", (roadmap_id,)
         ).fetchone()
-    return dict(row)
+    result = dict(row)
+    if payload.topics or payload.auto_subtopics:
+        raw_text = payload.topics if isinstance(payload.topics, str) else None
+        topic_list = payload.topics if isinstance(payload.topics, list) else None
+        imported = progress.import_learning_path(
+            name=payload.name,
+            raw_text=raw_text,
+            topics=topic_list,
+            category=payload.category,
+            description=payload.description,
+            auto_generate_if_empty=bool(payload.auto_subtopics),
+        )
+        result["added_topics"] = imported["added_topics"]
+        result["topic_count"] = imported["topic_count"]
+    return result
+
+
+@router.post("/roadmaps/import")
+def import_roadmap(payload: schema.LearningPathImportIn = Body(...)) -> dict[str, Any]:
+    """Create or populate a learning roadmap by automatically splitting pasted sub-topics."""
+    try:
+        return progress.import_learning_path(
+            name=payload.name,
+            raw_text=payload.raw_text,
+            topics=payload.topics,
+            category=payload.category,
+            description=payload.description,
+            priority=payload.priority,
+            auto_generate_if_empty=payload.auto_subtopics,
+        )
+    except ValueError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@router.post("/roadmaps/{roadmap_id}/topics/bulk")
+def bulk_create_topics(
+    roadmap_id: int, payload: schema.BulkTopicsIn = Body(...)
+) -> dict[str, Any]:
+    """Bulk-add multiple sub-topics (from pasted lines or list) into an existing roadmap."""
+    roadmap = _get_roadmap(roadmap_id)
+    try:
+        return progress.import_learning_path(
+            name=roadmap["name"],
+            raw_text=payload.raw_text,
+            topics=payload.topics,
+            category=roadmap["category"],
+            priority=payload.priority,
+            auto_generate_if_empty=False,
+        )
+    except ValueError as err:
+        raise HTTPException(400, str(err)) from err
 
 
 @router.patch("/roadmaps/{roadmap_id}")

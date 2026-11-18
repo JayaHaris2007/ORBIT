@@ -788,3 +788,312 @@ def get_nudges_enabled() -> bool:
 def set_nudges_enabled(enabled: bool) -> bool:
     set_setting(NUDGES_KEY, "1" if enabled else "0")
     return bool(enabled)
+
+
+# ---------------------------------------------------------------------------
+# Automatic sub-topic extraction, subject templates, and bulk path import
+# ---------------------------------------------------------------------------
+
+_SUBJECT_SUBTOPIC_TEMPLATES: dict[str, list[str]] = {
+    "c++": [
+        "Basics & Compilation",
+        "Variables & Data Types",
+        "Operators & Type Casting",
+        "Input / Output",
+        "Control Flow",
+        "Functions",
+        "Scope & Storage Classes",
+        "Arrays",
+        "Strings",
+        "Pointers",
+        "References",
+        "Dynamic Memory",
+        "Structs, Enums & Unions",
+        "Classes & Objects",
+        "Constructors & Destructors",
+        "static, this, friend & const Members",
+        "Operator Overloading",
+        "Inheritance",
+        "Polymorphism & Virtual Functions",
+        "Abstract Classes",
+        "Templates",
+        "Exception Handling",
+        "File Handling",
+        "Preprocessor & Macros",
+        "Multi-file Projects & Namespaces",
+        "auto, decltype & Range-based for",
+        "Lambdas",
+        "Smart Pointers",
+        "RAII",
+        "Move Semantics",
+        "Rule of 3 / 5 / 0",
+        "STL Containers",
+        "STL Iterators",
+        "Modern C++ (11/14/17/20)",
+        "Multithreading Basics",
+    ],
+    "python": [
+        "Syntax, Variables & Data Types",
+        "Control Flow & Loops",
+        "Functions, *args & **kwargs",
+        "Lists, Tuples, Sets & Dictionaries",
+        "Comprehensions & Generators",
+        "Modules, Packages & Virtual Environments",
+        "File I/O & Context Managers",
+        "Exception Handling",
+        "Object-Oriented Python & Dataclasses",
+        "Decorators & Closures",
+        "Type Hints & Pydantic",
+        "Asyncio & Concurrency",
+        "Testing with Pytest",
+    ],
+    "javascript": [
+        "Variables, Types & Operators",
+        "Functions, Closures & Scope",
+        "Arrays, Objects & Destructuring",
+        "DOM Manipulation & Events",
+        "Promises, Async / Await & Fetch",
+        "ES Modules & Bundlers",
+        "Prototypes & Classes",
+        "Error Handling & Debugging",
+        "TypeScript Fundamentals",
+    ],
+    "react": [
+        "JSX & Components",
+        "Props & State (useState)",
+        "Effects & Lifecycle (useEffect)",
+        "Refs, Memoization & Custom Hooks",
+        "Context API & Global State",
+        "Routing & Navigation",
+        "Data Fetching & Forms",
+        "Performance Optimization",
+    ],
+    "rust": [
+        "Cargo, Variables & Mutability",
+        "Ownership, Borrowing & Slices",
+        "Structs, Enums & Pattern Matching",
+        "Error Handling (Result & Option)",
+        "Collections & Iterators",
+        "Generics, Traits & Lifetimes",
+        "Smart Pointers & Concurrency",
+    ],
+    "sql": [
+        "Relational Model & Schemas",
+        "SELECT, Filtering & Sorting",
+        "Aggregations & GROUP BY",
+        "JOINs & Subqueries",
+        "Indexes & Query Performance",
+        "Transactions, ACID & Concurrency",
+        "Normalization & Schema Design",
+    ],
+    "machine learning": [
+        "Data Preprocessing & Feature Engineering",
+        "Linear & Logistic Regression",
+        "Decision Trees & Ensemble Methods",
+        "Model Evaluation & Cross-Validation",
+        "Clustering & Dimensionality Reduction",
+        "Neural Networks & Backpropagation",
+        "Transformers & LLM Fundamentals",
+    ],
+}
+
+_INTRO_SUBJECT_PATTERNS = (
+    # "Here are short C++ headings you can paste in:"
+    re.compile(
+        r"^(?:here\s+are\s+)?(?:some\s+)?(?:short\s+|the\s+)?(?P<subject>[A-Za-z0-9+#.\-/&\s]{1,50}?)\s+"
+        r"(?:headings?|sub[\s\-]?topics?|topics?|modules?|chapters?|lessons?|outline|syllabus|roadmap|learning\s+path)"
+        r"(?:\s+you\s+can\s+paste(?:\s+in)?)?\s*:?$",
+        re.IGNORECASE,
+    ),
+    # "Create learning path for C++:" / "Add new learning C++:" / "New learning path: C++"
+    re.compile(
+        r"^(?:(?:create|add|start|make|build|import)\s+(?:a\s+)?(?:new\s+)?)?"
+        r"(?:(?:academic|technical|personal)\s+)?"
+        r"(?:learning\s+path|learning\s+roadmap|roadmap|learning|course|study\s+plan)\s*"
+        r"(?:for|on|in|called|named|:)?\s*(?P<subject>[A-Za-z0-9+#.\-/&\s]{1,60}?)\s*:?$",
+        re.IGNORECASE,
+    ),
+    # "C++:" or "C++ Roadmap:"
+    re.compile(
+        r"^(?P<subject>[A-Za-z0-9+#.\-/&\s]{1,50}?)(?:\s+(?:roadmap|learning\s+path|sub[\s\-]?topics?|topics?|headings?))?\s*:$",
+        re.IGNORECASE,
+    ),
+)
+
+_BULLET_PREFIX = re.compile(r"^(?:[-*+•]|\d+[.)]|\[[ xX]?\])\s+")
+
+
+def _clean_subtopic_line(line: str) -> str:
+    cleaned = line.strip()
+    cleaned = _BULLET_PREFIX.sub("", cleaned)
+    cleaned = re.sub(r"^(\*\*|__)(.+?)(\*\*|__)$", r"\2", cleaned)
+    cleaned = cleaned.strip(" \t\"'`")
+    return cleaned[:120].strip()
+
+
+def generate_default_subtopics(subject: str) -> list[str]:
+    """Return a structured list of sub-topics for a given subject name."""
+    raw = subject.strip()
+    norm = raw.lower()
+    for key, template in _SUBJECT_SUBTOPIC_TEMPLATES.items():
+        if key == norm or key in norm or norm in key:
+            return list(template)
+    # Generic logical progression for any custom subject
+    return [
+        f"{raw} Fundamentals & Setup",
+        f"{raw} Core Concepts & Syntax",
+        f"{raw} Intermediate Patterns & Workflows",
+        f"{raw} Debugging, Testing & Best Practices",
+        f"{raw} Advanced Architecture & Optimization",
+        f"{raw} Hands-On Capstone Project",
+    ]
+
+
+def parse_learning_path_input(
+    raw_text: str | None = None,
+    explicit_name: str | None = None,
+) -> tuple[str | None, list[str]]:
+    """Extract (roadmap_name, subtopics_list) from pasted headings or command text.
+
+    Preserves commas inside single lines of a multi-line list (e.g.
+    ``Structs, Enums & Unions`` or ``static, this, friend & const Members``).
+    """
+    detected_name = explicit_name.strip() if explicit_name and explicit_name.strip() else None
+    if not raw_text or not raw_text.strip():
+        return detected_name, []
+
+    lines = [ln.strip() for ln in raw_text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return detected_name, []
+
+    topics: list[str] = []
+
+    if len(lines) >= 2:
+        first = lines[0]
+        body_lines = lines
+        for pat in _INTRO_SUBJECT_PATTERNS:
+            m = pat.match(first)
+            if m:
+                subj = m.group("subject").strip(" \"':-")
+                if subj and not detected_name:
+                    detected_name = subj
+                body_lines = lines[1:]
+                break
+        else:
+            # If the first line ends with ':' and is short, treat it as the roadmap name
+            if first.endswith(":") and len(first) <= 60:
+                cand = first[:-1].strip()
+                if cand and not detected_name:
+                    detected_name = cand
+                body_lines = lines[1:]
+
+        for ln in body_lines:
+            # Skip trailing instructions like "i need like if i give input..."
+            if len(ln) > 75 and re.search(r"\b(?:i\s+need|automatically|sub\s*topics|learning\s+path)\b", ln, re.IGNORECASE):
+                continue
+            item = _clean_subtopic_line(ln)
+            if item:
+                topics.append(item)
+    else:
+        single = lines[0]
+        # Check for "Name: topic1, topic2, topic3" or "... with topics: a, b, c"
+        if ":" in single:
+            left, right = single.split(":", 1)
+            for pat in _INTRO_SUBJECT_PATTERNS:
+                m = pat.match(left.strip())
+                if m and not detected_name:
+                    detected_name = m.group("subject").strip(" \"':-")
+                    break
+            else:
+                if not detected_name and len(left.strip()) <= 50:
+                    detected_name = left.strip()
+            parts = [p for p in re.split(r"\s*[;,]\s*", right) if p.strip()]
+        else:
+            parts = [p for p in re.split(r"\s*[;,]\s*", single) if p.strip()]
+
+        for p in parts:
+            item = _clean_subtopic_line(p)
+            if item:
+                topics.append(item)
+
+    # Deduplicate while preserving order (case-insensitive)
+    seen: set[str] = set()
+    unique_topics: list[str] = []
+    for t in topics:
+        key = t.lower()
+        if key not in seen:
+            seen.add(key)
+            unique_topics.append(t)
+
+    return detected_name, unique_topics
+
+
+def import_learning_path(
+    name: str | None = None,
+    raw_text: str | None = None,
+    topics: list[str] | None = None,
+    category: str = "technical",
+    description: str = "",
+    priority: int = 2,
+    auto_generate_if_empty: bool = True,
+) -> dict[str, Any]:
+    """Create or update a learning roadmap and populate all sub-topics in order."""
+    parsed_name, parsed_topics = parse_learning_path_input(raw_text, explicit_name=name)
+
+    final_topics: list[str] = []
+    seen: set[str] = set()
+    for candidate in [*(topics or []), *parsed_topics]:
+        cleaned = _clean_subtopic_line(str(candidate))
+        if cleaned and cleaned.lower() not in seen:
+            seen.add(cleaned.lower())
+            final_topics.append(cleaned)
+
+    roadmap_name = (parsed_name or "").strip()
+    if not roadmap_name:
+        if final_topics:
+            roadmap_name = f"{final_topics[0]} Path"[:120]
+        else:
+            raise ValueError("Please provide a roadmap name or a list of sub-topics.")
+
+    if not final_topics and auto_generate_if_empty:
+        final_topics = generate_default_subtopics(roadmap_name)
+
+    cat = category.strip().lower() if category else "technical"
+    if cat not in schema.ROADMAP_CATEGORIES:
+        cat = "technical"
+
+    existing = find_roadmap(roadmap_name)
+    created_roadmap = False
+    if existing and existing["name"].lower() == roadmap_name.lower():
+        roadmap_id = int(existing["id"])
+    else:
+        desc = description.strip() or f"Structured learning path for {roadmap_name} ({len(final_topics)} sub-topics)."
+        rm = create_roadmap(roadmap_name, category=cat, description=desc)
+        roadmap_id = int(rm["id"])
+        created_roadmap = True
+
+    added_topics: list[dict[str, Any]] = []
+    skipped_topics: list[str] = []
+    for topic_name in final_topics:
+        try:
+            created_topic = create_topic(
+                roadmap_id=roadmap_id,
+                name=topic_name,
+                priority=priority,
+            )
+            added_topics.append(created_topic)
+        except ValueError:
+            skipped_topics.append(topic_name)
+
+    full_roadmap = get_roadmap(roadmap_id)
+    summary = next((s for s in roadmap_summaries() if s["id"] == roadmap_id), full_roadmap)
+    return {
+        "roadmap": summary,
+        "roadmap_detail": full_roadmap,
+        "created_roadmap": created_roadmap,
+        "added_topics": added_topics,
+        "added_count": len(added_topics),
+        "skipped_topics": skipped_topics,
+        "topic_count": len(full_roadmap.get("topics", [])),
+    }
+

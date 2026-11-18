@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { emitBrainAudioLevel, emitBrainPulse, emitBrainState } from '../context/SpideyBrainContext';
+import { getGeminiConfig, getGeminiHeaders } from '../services/api';
 
 const ORBIT_TOKEN = (import.meta.env.VITE_ORBIT_TOKEN || '').trim();
 const getAuthHeaders = (extra = {}) => ({
+  ...getGeminiHeaders(),
   ...extra,
   ...(ORBIT_TOKEN ? { 'x-orbit-token': ORBIT_TOKEN } : {}),
 });
@@ -83,6 +85,22 @@ export function useOrbitAgent(activeChatIdProp) {
       })
       .catch((err) => console.warn('Failed to fetch history for chat:', err));
   }, [activeChatId]);
+
+  // Sync Gemini API config changes from Settings over live WebSocket
+  useEffect(() => {
+    const handleGeminiConfigChanged = () => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        const { apiKey, model } = getGeminiConfig();
+        wsRef.current.send(JSON.stringify({
+          type: 'set_gemini_config',
+          gemini_api_key: apiKey || null,
+          gemini_model: model,
+        }));
+      }
+    };
+    window.addEventListener('spidey:gemini_config_changed', handleGeminiConfigChanged);
+    return () => window.removeEventListener('spidey:gemini_config_changed', handleGeminiConfigChanged);
+  }, []);
 
   const isSpeakEnabled = () => {
     try {
@@ -168,6 +186,12 @@ export function useOrbitAgent(activeChatIdProp) {
         // Send set_chat right after socket opens with current active chat id
         const currentCid = activeChatIdRef.current || 'default';
         ws.send(JSON.stringify({ type: 'set_chat', chat_id: currentCid }));
+
+        // Sync saved Gemini API Studio config over WebSocket if present
+        const { apiKey, model } = getGeminiConfig();
+        if (apiKey) {
+          ws.send(JSON.stringify({ type: 'set_gemini_config', gemini_api_key: apiKey, gemini_model: model }));
+        }
 
         pingTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -298,9 +322,14 @@ export function useOrbitAgent(activeChatIdProp) {
     setMessages((prev) => [...prev, { role: 'user', content: text }]);
 
     const currentCid = activeChatIdRef.current || 'default';
+    const { apiKey, model } = getGeminiConfig();
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ message: text, chat_id: currentCid }));
+      wsRef.current.send(JSON.stringify({
+        message: text,
+        chat_id: currentCid,
+        ...(apiKey ? { gemini_api_key: apiKey, gemini_model: model } : {}),
+      }));
       return;
     }
 

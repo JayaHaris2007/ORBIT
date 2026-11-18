@@ -1,4 +1,4 @@
-# S.P.I.D.E.Y. Python Dependencies
+# S.P.I.D.E.Y. Python Dependencies (pinned to the tested environment)
 #
 # Install inside a virtual environment:
 #   python -m venv .venv
@@ -6,28 +6,29 @@
 #   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
 # Web Server, Async Streaming & Scheduling
-fastapi
-uvicorn[standard]
-aiohttp
-pydantic
-python-dotenv
-apscheduler
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+aiohttp==3.14.5
+pydantic==2.14.3
+python-dotenv==1.2.4
+APScheduler==3.11.3
 
 # Agent Tools, Fuzzy Matching, Date Parsing & Web Research
-rapidfuzz
-dateparser
-regex
-tavily-python
+RapidFuzz==3.14.6
+dateparser==1.5.0
+regex==2026.9.29
+tavily-python==0.8.5
 
 # Voice stack (Gradium Phonon CPU TTS + SpeechRecognition STT)
-ptts
-SpeechRecognition
-soundfile
-numpy
+ptts==0.6.0
+SpeechRecognition==3.17.0
+soundfile==0.14.0
+numpy==2.5.4
 
 # Discord Bot Integration
-discord.py
+discord.py==2.7.1
 
-# Testing
-pytest
-httpx
+# Testing & Linting
+pytest==9.2.0
+httpx==0.28.1
+ruff==0.17.3

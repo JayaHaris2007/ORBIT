@@ -270,6 +270,10 @@ const AssistantSidebar = () => {
                 setMessages((current) => [...current, ...data.notifications.map((item) => ({
                     role: 'assistant', content: item.content, notification: true
                 }))]);
+                const latestNotif = data.notifications[data.notifications.length - 1];
+                if (latestNotif?.content && voice.speakEnabled && voiceSession.state === 'idle') {
+                    voice.speak(latestNotif.content);
+                }
                 // A fired reminder may have changed reminders or tasks on the server.
                 refresh();
             } catch {
@@ -277,9 +281,51 @@ const AssistantSidebar = () => {
             }
         }, 5000);
         return () => window.clearInterval(interval);
-    }, [chatId, refresh]);
+    }, [chatId, refresh, voice, voiceSession.state]);
 
-    // Pick up chats created or renamed elsewhere (another tab, Discord bot).
+    // Periodically trigger proactive coach check-ins for pending tasks, habits, and learning.
+    useEffect(() => {
+        if (!chatId) return undefined;
+        const triggerCheckin = async () => {
+            try {
+                await apiRequest('/api/proactive/check-in', {
+                    method: 'POST',
+                    body: JSON.stringify({ chat_id: chatId, cooldown_minutes: 30 })
+                });
+            } catch {
+                // Ignore background check-in errors
+            }
+        };
+        const initialTimer = window.setTimeout(triggerCheckin, 90 * 1000);
+        const periodicTimer = window.setInterval(triggerCheckin, 20 * 60 * 1000);
+        return () => {
+            window.clearTimeout(initialTimer);
+            window.clearInterval(periodicTimer);
+        };
+    }, [chatId]);
+
+    // Pick up chats created or renamed elsewhere (another tab, Discord bot, or database reset).
+    useEffect(() => {
+        const handleDataReset = async () => {
+            try {
+                const data = await apiRequest('/api/chats');
+                const savedChats = data.chats || [];
+                if (savedChats.length) {
+                    setChats(savedChats);
+                    await openChat(savedChats[0].id);
+                } else {
+                    const created = await apiRequest('/api/chats', { method: 'POST' });
+                    setChats([created]);
+                    await openChat(created.id);
+                }
+            } catch {
+                setMessages([]);
+            }
+        };
+        window.addEventListener('orbit:data_reset', handleDataReset);
+        return () => window.removeEventListener('orbit:data_reset', handleDataReset);
+    }, [openChat]);
+
     useEffect(() => {
         if (!revision) return;
         apiRequest('/api/chats')
@@ -379,8 +425,8 @@ const AssistantSidebar = () => {
             setMessages(data.messages || []);
             if (data.navigate) goToPage(data.navigate);
             applyUiActions(data.ui_actions, `${value} ${data.response || ''}`);
-            if (data.response && voice.speakEnabled && voiceSession.state === 'idle') {
-                voice.speak(data.response);
+            if ((data.spoken_response || data.response) && voice.speakEnabled && voiceSession.state === 'idle') {
+                voice.speak(data.spoken_response || data.response);
             } else {
                 brain?.setBrainState('idle');
             }

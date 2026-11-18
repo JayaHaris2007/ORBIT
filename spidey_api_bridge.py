@@ -106,6 +106,7 @@ def _install_stubs_if_needed() -> None:
             def delete(self, *a, **k): return lambda f: f
             def websocket(self, *a, **k): return lambda f: f
             def exception_handler(self, *a, **k): return lambda f: f
+            def middleware(self, *a, **k): return lambda f: f
 
         sys.modules["fastapi"].FastAPI = _FastAPIStub
         sys.modules["fastapi"].APIRouter = _FastAPIStub

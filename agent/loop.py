@@ -23,6 +23,12 @@ import aiohttp
 
 from agent.confirm import ConfirmationManager
 from agent.deps import AgentDeps
+from agent.gemini import (
+    gemini_chat_request,
+    gemini_chat_stream,
+    get_active_gemini_config,
+    is_gemini_active,
+)
 from agent.tools import (
     TOOLS,
     ToolContext,
@@ -404,12 +410,23 @@ def run_agent_loop(
         _trim_history_if_needed(messages, num_ctx)
         max_tokens = _compute_max_tokens(prompt, channel, deps)
 
-        resp_data = _ollama_chat_request(
-            messages,
-            tools=ollama_tools,
-            timeout=TURN_TIMEOUT_SECONDS,
-            max_tokens=max_tokens,
-        )
+        gemini_key, gemini_model = get_active_gemini_config()
+        if gemini_key:
+            resp_data = gemini_chat_request(
+                messages,
+                api_key=gemini_key,
+                model=gemini_model,
+                tools=ollama_tools,
+                timeout=TURN_TIMEOUT_SECONDS,
+                max_tokens=max_tokens,
+            )
+        else:
+            resp_data = _ollama_chat_request(
+                messages,
+                tools=ollama_tools,
+                timeout=TURN_TIMEOUT_SECONDS,
+                max_tokens=max_tokens,
+            )
 
         msg = resp_data.get("message", {})
         _log_round_stats(
@@ -424,7 +441,8 @@ def run_agent_loop(
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
             final_text = _clean_think_tags(msg.get("content", ""))
-            provider = "agent-tools" if total_tool_calls > 0 else "ollama"
+            default_provider = "gemini" if is_gemini_active() else "ollama"
+            provider = "agent-tools" if total_tool_calls > 0 else default_provider
             return AgentResult(
                 reply=final_text,
                 ui_actions=ctx.ui_actions,
@@ -486,12 +504,26 @@ async def run_agent_loop_stream(
         eval_duration = 0
         emitted_in_round = False
 
-        async for chunk in _ollama_chat_stream(
-            messages,
-            tools=ollama_tools,
-            timeout=TURN_TIMEOUT_SECONDS,
-            max_tokens=max_tokens,
-        ):
+        gemini_key, gemini_model = get_active_gemini_config()
+        chunk_stream = (
+            gemini_chat_stream(
+                messages,
+                api_key=gemini_key,
+                model=gemini_model,
+                tools=ollama_tools,
+                timeout=TURN_TIMEOUT_SECONDS,
+                max_tokens=max_tokens,
+            )
+            if gemini_key
+            else _ollama_chat_stream(
+                messages,
+                tools=ollama_tools,
+                timeout=TURN_TIMEOUT_SECONDS,
+                max_tokens=max_tokens,
+            )
+        )
+
+        async for chunk in chunk_stream:
             msg_chunk = chunk.get("message") or {}
             chunk_tools = msg_chunk.get("tool_calls")
             if chunk_tools:
@@ -529,7 +561,8 @@ async def run_agent_loop_stream(
 
         if not tool_calls:
             final_text = _clean_think_tags(full_content)
-            provider = "agent-tools" if total_tool_calls > 0 else "ollama"
+            default_provider = "gemini" if is_gemini_active() else "ollama"
+            provider = "agent-tools" if total_tool_calls > 0 else default_provider
             return AgentResult(
                 reply=final_text,
                 ui_actions=ctx.ui_actions,

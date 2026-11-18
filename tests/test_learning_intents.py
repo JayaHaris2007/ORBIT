@@ -281,3 +281,66 @@ def test_learning_activity_and_nudges_commands(learning_db):
     assert "enabled" in on_reply
     assert progress.get_nudges_enabled()
 
+
+def test_pasted_cpp_headings_creates_roadmap_and_all_subtopics(learning_db):
+    pasted = (
+        "Here are short C++ headings you can paste in:\n\n"
+        "Basics & Compilation\n"
+        "Variables & Data Types\n"
+        "Operators & Type Casting\n"
+        "Input / Output\n"
+        "Control Flow\n"
+        "Functions\n"
+        "Scope & Storage Classes\n"
+        "Arrays\n"
+        "Strings\n"
+        "Pointers\n"
+        "References\n"
+        "Dynamic Memory\n"
+        "Structs, Enums & Unions\n"
+        "Classes & Objects\n"
+        "Constructors & Destructors\n"
+        "static, this, friend & const Members\n"
+        "Operator Overloading\n"
+        "Inheritance\n"
+        "Polymorphism & Virtual Functions\n"
+        "Abstract Classes\n"
+        "Templates\n"
+        "Exception Handling\n"
+        "File Handling\n"
+        "Preprocessor & Macros\n"
+        "Multi-file Projects & Namespaces\n"
+        "auto, decltype & Range-based for\n"
+        "Lambdas\n"
+        "Smart Pointers\n"
+        "RAII\n"
+        "Move Semantics\n"
+        "Rule of 3 / 5 / 0\n"
+        "STL Containers\n"
+        "STL Iterators\n"
+        "Modern C++ (11/14/17/20)\n"
+        "Multithreading Basics\n"
+    )
+    reply, provider = app._handle_local_command(pasted, "c1")
+    assert provider == "local-learning"
+    assert "**C++**" in reply
+    assert "**35 sub-topics**" in reply
+
+    cpp_rm = progress.find_roadmap("C++")
+    assert cpp_rm is not None
+    assert cpp_rm["topic_count"] == 35
+    # Commas inside single lines must be preserved as a single sub-topic
+    assert progress.find_topic("Structs, Enums & Unions", roadmap_id=cpp_rm["id"]) is not None
+    assert progress.find_topic("static, this, friend & const Members", roadmap_id=cpp_rm["id"]) is not None
+    assert progress.find_topic("auto, decltype & Range-based for", roadmap_id=cpp_rm["id"]) is not None
+
+
+def test_auto_subtopic_division_from_subject_command(learning_db):
+    reply, provider = app._handle_local_command("add new learning Rust", "c1")
+    assert provider == "local-learning"
+    assert "**Rust**" in reply
+    rust_rm = progress.find_roadmap("Rust")
+    assert rust_rm is not None
+    assert rust_rm["topic_count"] >= 5
+
+

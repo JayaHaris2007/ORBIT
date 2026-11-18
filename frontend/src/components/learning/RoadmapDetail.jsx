@@ -105,17 +105,25 @@ const RoadmapDetail = ({ roadmap, onClose, onChanged }) => {
 
     const handleAddTopic = async (e) => {
         e.preventDefault();
-        const name = newName.trim();
-        if (!name || busy) return;
+        const raw = newName.trim();
+        if (!raw || busy) return;
         setBusy(true);
         setError('');
         try {
-            await learningService.createTopic({
-                roadmap_id: detail.id,
-                roadmapId: detail.id,
-                name,
-                priority: newPriority,
-            });
+            const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+            if (lines.length > 1) {
+                await learningService.bulkCreateTopics(detail.id, {
+                    raw_text: raw,
+                    priority: newPriority,
+                });
+            } else {
+                await learningService.createTopic({
+                    roadmap_id: detail.id,
+                    roadmapId: detail.id,
+                    name: raw,
+                    priority: newPriority,
+                });
+            }
             setNewName('');
             setNewPriority(2);
             setIsAdding(false);
@@ -301,15 +309,14 @@ const RoadmapDetail = ({ roadmap, onClose, onChanged }) => {
                 <div className="p-6 border-t border-white/10">
                     {isAdding ? (
                         <form onSubmit={handleAddTopic} className="space-y-3">
-                            <div className="flex gap-2">
-                                <input
-                                    type="text"
+                            <div className="flex gap-2 items-start">
+                                <textarea
+                                    rows={3}
                                     value={newName}
                                     onChange={(e) => setNewName(e.target.value)}
-                                    placeholder="Topic name"
-                                    className="flex-1 bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-white text-sm focus:border-orange-400/50 outline-none"
+                                    placeholder="Topic name (or paste multiple headings, one per line)"
+                                    className="flex-1 bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:border-orange-400/50 outline-none resize-y"
                                     autoFocus
-                                    maxLength={120}
                                 />
                                 <select
                                     value={newPriority}

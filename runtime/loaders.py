@@ -134,41 +134,53 @@ def load_all_models_eager(
     log.info("=== BEGINNING SINGLE-PROCESS EAGER MODEL INITIALIZATION ===")
     total_start = time.perf_counter()
 
-    # 1. LLM (Ollama only)
-    ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").strip()
-    ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3.5:4b").strip()
-
-    log.info("Checking for Ollama at %s (model=%s)...", ollama_url, ollama_model)
-    ollama_active = wait_for_ollama(ollama_url, ollama_model, max_wait=10.0)
-
-    if ollama_active:
-        log.info(
-            "Detected running Ollama at %s with model '%s'. Using Ollama backend.",
-            ollama_url,
-            ollama_model,
-        )
+    # 1. LLM (Ollama or Gemini API)
+    llm_backend = os.environ.get("LLM_BACKEND", "ollama").strip().lower()
+    if llm_backend == "gemini":
+        gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+        log.info("LLM_BACKEND=gemini (model=%s); skipping local Ollama startup check.", gemini_model)
         REGISTRY.register(
             "llm",
-            "ollama",
-            metrics={"backend": "ollama", "model": ollama_model, "load_time": 0.0, "device": "ollama"},
+            "gemini",
+            metrics={"backend": "gemini", "model": gemini_model, "load_time": 0.0, "device": "cloud"},
         )
-        try:
-            import app
-            app._ollama_ready = True
-        except Exception:
-            pass
+        ollama_active = False
     else:
-        err_msg = (
-            f"Ollama is not running at {ollama_url} or model '{ollama_model}' not found. "
-            f"Start Ollama with `ollama serve` and pull the model with `ollama pull {ollama_model}`."
-        )
-        log.warning(err_msg)
-        REGISTRY.fail("llm", err_msg)
-        try:
-            import app
-            app._ollama_ready = False
-        except Exception:
-            pass
+        ollama_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").strip()
+        ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3.5:4b").strip()
+
+        log.info("Checking for Ollama at %s (model=%s)...", ollama_url, ollama_model)
+        ollama_active = wait_for_ollama(ollama_url, ollama_model, max_wait=10.0)
+
+        if ollama_active:
+            log.info(
+                "Detected running Ollama at %s with model '%s'. Using Ollama backend.",
+                ollama_url,
+                ollama_model,
+            )
+            REGISTRY.register(
+                "llm",
+                "ollama",
+                metrics={"backend": "ollama", "model": ollama_model, "load_time": 0.0, "device": "ollama"},
+            )
+            try:
+                import app
+                app._ollama_ready = True
+            except Exception:
+                pass
+        else:
+            err_msg = (
+                f"Ollama is not running at {ollama_url} or model '{ollama_model}' not found. "
+                f"Start Ollama with `ollama serve` and pull the model with `ollama pull {ollama_model}` "
+                f"(or provide a Gemini API key in Settings)."
+            )
+            log.warning(err_msg)
+            REGISTRY.fail("llm", err_msg)
+            try:
+                import app
+                app._ollama_ready = False
+            except Exception:
+                pass
 
     # 2. Phonon TTS (CPU) with Windows SAPI fallback
     try:

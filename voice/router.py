@@ -228,7 +228,7 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
 
     async def speak_sentences(reply_text: str) -> None:
         nonlocal is_speaking
-        cleaned = text_clean.clean_text_for_speech(reply_text)
+        cleaned = text_clean.summarize_for_speech(reply_text)
         sentences_list = sentences.split_sentences(cleaned, max_chars=config.MAX_SENTENCE_CHARS)
         if not sentences_list:
             return
@@ -310,6 +310,7 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                 {
                     "type": "reply",
                     "text": reply_text,
+                    "spoken_text": text_clean.summarize_for_speech(reply_text),
                     "chat_id": chat_res.get("chat_id") or chat_id,
                     "messages": chat_res.get("messages"),
                     "navigate": chat_res.get("navigate"),

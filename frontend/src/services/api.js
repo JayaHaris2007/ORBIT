@@ -2,9 +2,40 @@ const defaultBase = typeof window !== 'undefined' ? window.location.origin : 'ht
 const API_BASE_URL = (import.meta.env.VITE_SPIDEY_API_BASE_URL || defaultBase).replace(/\/$/, '');
 const ORBIT_TOKEN = (import.meta.env.VITE_ORBIT_TOKEN || '').trim();
 
+export const GEMINI_KEY_STORAGE = 'spidey_gemini_api_key';
+export const GEMINI_MODEL_STORAGE = 'spidey_gemini_model';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
+
+const DEPRECATED_GEMINI_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']);
+
+export const getGeminiConfig = () => {
+    try {
+        const apiKey = (localStorage.getItem(GEMINI_KEY_STORAGE) || '').trim();
+        let model = (localStorage.getItem(GEMINI_MODEL_STORAGE) || DEFAULT_GEMINI_MODEL).trim() || DEFAULT_GEMINI_MODEL;
+        if (DEPRECATED_GEMINI_MODELS.has(model) || (model === 'gemini-4-hydrogen' && !localStorage.getItem('spidey_gemini_model_v35'))) {
+            model = DEFAULT_GEMINI_MODEL;
+            localStorage.setItem(GEMINI_MODEL_STORAGE, model);
+            localStorage.setItem('spidey_gemini_model_v35', '1');
+        }
+        return { apiKey, model };
+    } catch {
+        return { apiKey: '', model: DEFAULT_GEMINI_MODEL };
+    }
+};
+
+export const getGeminiHeaders = () => {
+    const { apiKey, model } = getGeminiConfig();
+    if (!apiKey) return {};
+    return {
+        'X-Gemini-Api-Key': apiKey,
+        'X-Gemini-Model': model,
+    };
+};
+
 export const apiRequest = async (path, options = {}) => {
     const headers = {
         'Content-Type': 'application/json',
+        ...getGeminiHeaders(),
         ...(options.headers || {})
     };
     if (ORBIT_TOKEN) {
@@ -25,6 +56,7 @@ export const apiStreamRequest = async (path, options = {}, onEvent) => {
     const headers = {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
+        ...getGeminiHeaders(),
         ...(options.headers || {})
     };
     if (ORBIT_TOKEN) {

@@ -384,6 +384,22 @@ export const learningService = {
         });
     },
 
+    importRoadmap: async (data) => {
+        if (MOCK_ENABLED) return mockCreateRoadmap(data);
+        return apiRequest('/api/learning/roadmaps/import', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    },
+
+    bulkCreateTopics: async (roadmapId, data) => {
+        if (MOCK_ENABLED) return { added_topics: [] };
+        return apiRequest(`/api/learning/roadmaps/${roadmapId}/topics/bulk`, {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    },
+
     updateRoadmap: async (id, patch) => {
         if (MOCK_ENABLED) return mockPatchRoadmap(id, patch);
         return apiRequest(`/api/learning/roadmaps/${id}`, {

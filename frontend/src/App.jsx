@@ -1,20 +1,22 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useTheme } from './context/AuthContext';
 import { AppDataProvider } from './context/AppDataContext';
 import { SpideyBrainProvider } from './context/SpideyBrainContext';
 import Navbar from './components/Navbar';
-import Dashboard from './pages/Dashboard';
-import Habits from './pages/Habits';
-import Todos from './pages/Todos';
-import Analytics from './pages/Analytics';
-import Settings from './pages/Settings';
-import RemindersMemory from './pages/RemindersMemory';
-import Learning from './pages/Learning';
 import ErrorBoundary from './components/ErrorBoundary';
 import AssistantSidebar from './components/AssistantSidebar';
 import ParallaxStage from './components/ParallaxStage';
 import ScrollProgressLine from './components/ScrollProgressLine';
-import SpideyCrawlerOverlay from './components/three/SpideyCrawlerOverlay';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Habits = lazy(() => import('./pages/Habits'));
+const Todos = lazy(() => import('./pages/Todos'));
+const Analytics = lazy(() => import('./pages/Analytics'));
+const Settings = lazy(() => import('./pages/Settings'));
+const RemindersMemory = lazy(() => import('./pages/RemindersMemory'));
+const Learning = lazy(() => import('./pages/Learning'));
+const SpideyCrawlerOverlay = lazy(() => import('./components/three/SpideyCrawlerOverlay'));
 
 const AppLayout = ({ children }) => {
     const { theme } = useTheme();
@@ -24,12 +26,16 @@ const AppLayout = ({ children }) => {
         <Navbar />
         <div className="app-main-shell flex-1 md:ml-64 min-w-0 transition-all duration-200 flex flex-col">
             <ParallaxStage>
-                {children}
+                <Suspense fallback={<div className="p-8 text-xs font-mono text-textMuted uppercase tracking-widest">Loading module...</div>}>
+                    {children}
+                </Suspense>
             </ParallaxStage>
         </div>
         {/* S.P.I.D.E.Y is docked on the right on every page */}
         <AssistantSidebar />
-        <SpideyCrawlerOverlay />
+        <Suspense fallback={null}>
+            <SpideyCrawlerOverlay />
+        </Suspense>
     </div>;
 };
 

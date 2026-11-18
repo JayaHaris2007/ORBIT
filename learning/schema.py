@@ -33,6 +33,24 @@ class RoadmapIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     category: Category = "technical"
     description: str = Field(default="", max_length=2000)
+    topics: list[str] | str | None = None
+    auto_subtopics: bool = False
+
+
+class LearningPathImportIn(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    category: Category = "technical"
+    description: str = Field(default="", max_length=2000)
+    raw_text: str | None = None
+    topics: list[str] | None = None
+    priority: int = Field(default=2, ge=1, le=3)
+    auto_subtopics: bool = True
+
+
+class BulkTopicsIn(BaseModel):
+    raw_text: str | None = None
+    topics: list[str] | None = None
+    priority: int = Field(default=2, ge=1, le=3)
 
 
 class RoadmapPatch(BaseModel):

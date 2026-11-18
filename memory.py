@@ -1001,3 +1001,43 @@ class MemoryStore:
             selected = trial
         return selected
 
+    def clear_all_data(self) -> dict[str, int]:
+        """Delete all user records across core and learning tables in the SQLite database."""
+        tables_to_wipe = (
+            "messages",
+            "notifications",
+            "external_sessions",
+            "reminder_delivery_targets",
+            "reminders",
+            "conversations",
+            "memories",
+            "tasks",
+            "habit_completions",
+            "habits",
+            "learning_activities",
+            "task_topic_links",
+            "topic_prerequisites",
+            "topics",
+            "roadmaps",
+        )
+        deleted_counts: dict[str, int] = {}
+        with self.connect() as connection:
+            existing_tables = {
+                row["name"]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            for table in tables_to_wipe:
+                if table in existing_tables:
+                    cur = connection.execute(f"DELETE FROM {table}")
+                    deleted_counts[table] = max(0, cur.rowcount)
+            if "gamification" in existing_tables:
+                connection.execute(
+                    "UPDATE gamification SET xp = 0, valid_streak_dates = '[]', "
+                    "achievements = '[]', updated_at = ? WHERE id = 1",
+                    (_now(),),
+                )
+        return deleted_counts
+
+

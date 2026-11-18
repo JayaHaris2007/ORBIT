@@ -5,6 +5,7 @@ import {
     fetchVoiceSettings,
     getSharedAudioQueue,
     splitSentencesClient,
+    summarizeForSpeechClient,
     stopVoiceTurn,
     updateVoiceSettings
 } from '../services/voiceService';
@@ -114,7 +115,8 @@ export function useVoice() {
             audioQueue.stop();
             const currentEpoch = audioQueue.epoch;
 
-            const sentences = splitSentencesClient(text);
+            const condensed = summarizeForSpeechClient(text);
+            const sentences = splitSentencesClient(condensed);
             if (!sentences.length) return;
 
             setIsSpeaking(true);

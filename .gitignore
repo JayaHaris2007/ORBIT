@@ -75,3 +75,7 @@ Thumbs.db
 # Logs and Backups
 logs/
 backups/
+
+# Local backups and scratch
+backups/
+scratch/__pycache__/

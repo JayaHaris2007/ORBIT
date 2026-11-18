@@ -1,14 +1,16 @@
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
 # Use a COPY of assistant.db so real data isn't touched
 _temp_dir = tempfile.TemporaryDirectory()
 _test_db = Path(_temp_dir.name) / "assistant.db"
-_src_db = Path(__file__).resolve().parent / "assistant.db"
+_src_db = Path(__file__).resolve().parents[2] / "assistant.db"
 if _src_db.is_file():
     shutil.copy2(_src_db, _test_db)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import app
 
 app.DATABASE_PATH = _test_db
@@ -30,3 +32,5 @@ for phrase in [
         print(f"{phrase!r} -> {app._handle_local_command(phrase, chat)}")
     except Exception as error:
         print(f"{phrase!r} -> ERROR {error}")
+
+

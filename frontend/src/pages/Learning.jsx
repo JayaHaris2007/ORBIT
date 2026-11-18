@@ -40,7 +40,9 @@ const Learning = () => {
     // Roadmap creation + deletion modals
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [newName, setNewName] = useState('');
-    const [newCategory, setNewCategory] = useState('personal');
+    const [newCategory, setNewCategory] = useState('technical');
+    const [newTopicsText, setNewTopicsText] = useState('');
+    const [autoSubtopics, setAutoSubtopics] = useState(true);
     const [roadmapToDelete, setRoadmapToDelete] = useState(null);
     const [selectedRoadmap, setSelectedRoadmap] = useState(null);
     const [busy, setBusy] = useState(false);
@@ -68,14 +70,44 @@ const Learning = () => {
         if (currentUser) loadAll();
     }, [currentUser, revision, loadAll]);
 
+    const handleTopicsPasteChange = (val) => {
+        setNewTopicsText(val);
+        if (!newName.trim() && val.trim()) {
+            const firstLine = val.trim().split(/\r?\n/)[0].trim();
+            const headingMatch = firstLine.match(
+                /^(?:here\s+are\s+)?(?:some\s+)?(?:short\s+|the\s+)?([A-Za-z0-9+#.\-/&\s]{1,50}?)\s+(?:headings?|sub[\s-]?topics?|topics?|roadmap|learning\s+path)/i
+            );
+            if (headingMatch?.[1]) {
+                setNewName(headingMatch[1].trim());
+            } else if (firstLine.endsWith(':') && firstLine.length <= 50) {
+                setNewName(firstLine.slice(0, -1).trim());
+            }
+        }
+    };
+
+    const detectedSubtopicsCount = newTopicsText
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l && !/^(?:here\s+are\s+|create\s+|add\s+).*:$/i.test(l)).length;
+
     const handleCreateRoadmap = async (e) => {
         e.preventDefault();
-        if (!newName.trim() || busy) return;
+        if ((!newName.trim() && !newTopicsText.trim()) || busy) return;
         setBusy(true);
         try {
-            await learningService.createRoadmap({ name: newName.trim(), category: newCategory });
+            if (newTopicsText.trim() || autoSubtopics) {
+                await learningService.importRoadmap({
+                    name: newName.trim() || undefined,
+                    category: newCategory,
+                    raw_text: newTopicsText.trim() || undefined,
+                    auto_subtopics: autoSubtopics,
+                });
+            } else {
+                await learningService.createRoadmap({ name: newName.trim(), category: newCategory });
+            }
             setNewName('');
-            setNewCategory('personal');
+            setNewTopicsText('');
+            setNewCategory('technical');
             setIsCreateOpen(false);
             await loadAll();
         } catch (createError) {
@@ -313,10 +345,38 @@ const Learning = () => {
                                         type="text"
                                         value={newName}
                                         onChange={(e) => setNewName(e.target.value)}
-                                        placeholder="e.g. Machine Learning"
+                                        placeholder="e.g. C++ or Machine Learning"
                                         className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-white text-sm focus:border-orange-400/50 outline-none transition-colors"
                                         autoFocus
                                     />
+                                </div>
+                                <div>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <label className="text-[10px] uppercase font-bold text-textMuted">
+                                            Sub-topics (paste headings — one per line)
+                                        </label>
+                                        {detectedSubtopicsCount > 0 && (
+                                            <span className="text-[10px] font-mono uppercase text-orange-300">
+                                                {detectedSubtopicsCount} sub-topic{detectedSubtopicsCount !== 1 ? 's' : ''} detected
+                                            </span>
+                                        )}
+                                    </div>
+                                    <textarea
+                                        rows={5}
+                                        value={newTopicsText}
+                                        onChange={(e) => handleTopicsPasteChange(e.target.value)}
+                                        placeholder={"Paste headings here (one per line), e.g.:\nBasics & Compilation\nVariables & Data Types\nPointers\n..."}
+                                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-orange-400/50 outline-none transition-colors resize-y"
+                                    />
+                                    <label className="mt-2 flex items-center gap-2 text-xs text-textMuted cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={autoSubtopics}
+                                            onChange={(e) => setAutoSubtopics(e.target.checked)}
+                                            className="accent-orange-500"
+                                        />
+                                        <span>Auto-divide into sub-topics if none are pasted</span>
+                                    </label>
                                 </div>
                                 <div>
                                     <label className="text-[10px] uppercase font-bold text-textMuted mb-2 block">Category</label>
@@ -346,7 +406,7 @@ const Learning = () => {
                                     </button>
                                     <button
                                         type="submit"
-                                        disabled={!newName.trim() || busy}
+                                        disabled={(!newName.trim() && !newTopicsText.trim()) || busy}
                                         className="flex-1 py-3 rounded-lg bg-primary hover:bg-orange-500 text-white transition-all uppercase text-xs font-bold tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
                                         {busy ? 'Creating…' : 'Create'}

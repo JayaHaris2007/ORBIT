@@ -208,23 +208,23 @@ export default function SpideyCompanionCanvas({
         };
         document.addEventListener('visibilitychange', onVisibilityChange);
 
-        const clock = new THREE.Clock();
+        const timer = new THREE.Timer();
         let rafId = 0;
 
-        const animate = () => {
+        const animate = (timestamp) => {
             rafId = requestAnimationFrame(animate);
+            timer.update(timestamp);
             if (!isVisible || !isTabVisible) {
-                clock.getDelta();
                 return;
             }
 
-            const delta = Math.min(clock.getDelta(), 0.05);
+            const delta = Math.min(timer.getDelta(), 0.05);
             if (companionRef.current) {
                 companionRef.current.mixer.update(delta);
             }
 
             // Smooth look-at cursor tilt + gentle idle sway
-            const sway = Math.sin(clock.elapsedTime * 0.8) * 0.08;
+            const sway = Math.sin(timer.getElapsed() * 0.8) * 0.08;
             rootGroup.rotation.y += (targetRotY + sway - rootGroup.rotation.y) * Math.min(1, delta * 5.5);
             rootGroup.rotation.x += (targetRotX - rootGroup.rotation.x) * Math.min(1, delta * 5.5);
 

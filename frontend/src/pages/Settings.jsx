@@ -1,14 +1,23 @@
 import { useState, useEffect } from 'react';
 import { useAuth, useTheme } from '../context/AuthContext';
+import { useAppData } from '../context/AppDataContext';
 import { useNotifications } from '../hooks/useNotifications';
-import { User, Bell, Shield, LogOut, ChevronRight, X, AlertTriangle, Save, Loader } from 'lucide-react';
+import { User, Bell, Shield, LogOut, ChevronRight, X, AlertTriangle, Save, Loader, Key, Eye, EyeOff, Trash2, Database } from 'lucide-react';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
 import ConfirmationModal from '../components/ConfirmationModal';
+import {
+    apiRequest,
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_KEY_STORAGE,
+    GEMINI_MODEL_STORAGE,
+    getGeminiConfig,
+} from '../services/api';
 
 const Settings = () => {
     const { currentUser, logout } = useAuth();
     const { theme, setTheme } = useTheme();
+    const { refresh } = useAppData();
     const { requestPermission } = useNotifications(currentUser);
     const [isLoading, setIsLoading] = useState(false);
     const [message, setMessage] = useState({ type: '', text: '' });
@@ -29,6 +38,12 @@ const Settings = () => {
 
     // Preferences State
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+
+    // AI Studio Gemini API Key State (BYOK)
+    const [geminiApiKey, setGeminiApiKey] = useState(() => getGeminiConfig().apiKey);
+    const [geminiModel, setGeminiModel] = useState(() => getGeminiConfig().model);
+    const [showGeminiKey, setShowGeminiKey] = useState(false);
+    const [hasSavedGeminiKey, setHasSavedGeminiKey] = useState(() => Boolean(getGeminiConfig().apiKey));
 
     // Initial Fetch for Preferences
     useEffect(() => {
@@ -117,21 +132,119 @@ const Settings = () => {
         showMessage('success', 'Theme updated.');
     };
 
-    const handleDeleteAccount = async () => {
+    const handleSaveGeminiConfig = (e) => {
+        e.preventDefault();
+        const trimmedKey = geminiApiKey.trim();
+        const chosenModel = (geminiModel || DEFAULT_GEMINI_MODEL).trim();
+        try {
+            if (trimmedKey) {
+                localStorage.setItem(GEMINI_KEY_STORAGE, trimmedKey);
+                localStorage.setItem(GEMINI_MODEL_STORAGE, chosenModel);
+                setHasSavedGeminiKey(true);
+                showMessage('success', `Gemini API active (${chosenModel}).`);
+            } else {
+                localStorage.removeItem(GEMINI_KEY_STORAGE);
+                localStorage.setItem(GEMINI_MODEL_STORAGE, chosenModel);
+                setHasSavedGeminiKey(false);
+                showMessage('success', 'Cleared Gemini key — using local Ollama.');
+            }
+            window.dispatchEvent(new CustomEvent('spidey:gemini_config_changed'));
+        } catch (error) {
+            console.error(error);
+            showMessage('error', 'Failed to save Gemini API key.');
+        }
+    };
+
+    const handleClearGeminiConfig = () => {
+        try {
+            localStorage.removeItem(GEMINI_KEY_STORAGE);
+            setGeminiApiKey('');
+            setHasSavedGeminiKey(false);
+            window.dispatchEvent(new CustomEvent('spidey:gemini_config_changed'));
+            showMessage('success', 'Switched back to local Ollama.');
+        } catch (error) {
+            console.error(error);
+            showMessage('error', 'Failed to clear Gemini API key.');
+        }
+    };
+
+    const wipeDatabaseAndSyncUi = async () => {
+        try {
+            await apiRequest('/api/database', { method: 'DELETE' });
+        } catch (err) {
+            // Fallback if running an un-restarted backend process without /api/database
+            if (String(err?.message || '').toLowerCase().includes('not found')) {
+                const [tasksData, habitsData, memData, remData, rmData] = await Promise.all([
+                    apiRequest('/api/tasks?include_completed=true').catch(() => ({ tasks: [] })),
+                    apiRequest('/api/habits').catch(() => ({ habits: [] })),
+                    apiRequest('/api/memories').catch(() => ({ memories: [] })),
+                    apiRequest('/api/reminders').catch(() => ({ reminders: [] })),
+                    apiRequest('/api/learning/roadmaps').catch(() => ({ roadmaps: [] })),
+                ]);
+                await Promise.all([
+                    apiRequest('/api/chats', { method: 'DELETE' }).catch(() => {}),
+                    ...(tasksData.tasks || []).map((t) => apiRequest(`/api/tasks/${t.id}`, { method: 'DELETE' }).catch(() => {})),
+                    ...(habitsData.habits || []).map((h) => apiRequest(`/api/habits/${h.id}`, { method: 'DELETE' }).catch(() => {})),
+                    ...(memData.memories || []).map((m) => apiRequest(`/api/memories/${m.id}`, { method: 'DELETE' }).catch(() => {})),
+                    ...(remData.reminders || []).map((r) => apiRequest(`/api/reminders/${r.id}`, { method: 'DELETE' }).catch(() => {})),
+                    ...(rmData.roadmaps || []).map((rm) => apiRequest(`/api/learning/roadmaps/${rm.id}`, { method: 'DELETE' }).catch(() => {})),
+                ]);
+            } else {
+                throw err;
+            }
+        }
+        try {
+            localStorage.removeItem('spidey_active_chat_id');
+            localStorage.removeItem('jarvis_active_chat_id');
+        } catch { /* ignore */ }
+        refresh?.();
+        window.dispatchEvent(new CustomEvent('orbit:data_reset'));
+        window.dispatchEvent(
+            new CustomEvent('orbit:refresh', {
+                detail: { sections: ['tasks', 'habits', 'memories', 'reminders', 'learning', 'gamification'] },
+            })
+        );
+    };
+
+    const handleDeleteAllDatabaseData = () => {
         setModalConfig({
             isOpen: true,
-            title: 'Delete Account',
-            message: 'Are you sure you want to delete your account? This action cannot be undone. All data will be permanently erased.',
+            title: 'Delete All Database Data',
+            message:
+                'This will permanently erase all tasks, daily habits, reminders, saved memories/notes, chat history, learning roadmaps/topics, and XP from assistant.db. This action cannot be undone.',
             type: 'danger',
             confirmString: 'DELETE',
             onConfirm: async () => {
                 setIsLoading(true);
                 try {
-                    showMessage('success', 'Local profile data is retained by S.P.I.D.E.Y.');
+                    await wipeDatabaseAndSyncUi();
+                    showMessage('success', 'All database data has been permanently deleted.');
+                } catch (error) {
+                    console.error(error);
+                    showMessage('error', error.message || 'Failed to delete database data.');
+                } finally {
+                    setIsLoading(false);
+                }
+            },
+        });
+    };
+
+    const handleDeleteAccount = async () => {
+        setModalConfig({
+            isOpen: true,
+            title: 'Delete Account & All Data',
+            message: 'Are you sure you want to delete your account? This action cannot be undone. All database data will be permanently erased.',
+            type: 'danger',
+            confirmString: 'DELETE',
+            onConfirm: async () => {
+                setIsLoading(true);
+                try {
+                    await wipeDatabaseAndSyncUi();
+                    showMessage('success', 'All database data erased.');
                     logout();
                 } catch (error) {
                     console.error(error);
-                    showMessage('error', 'Failed to delete account. You may need to re-login first.');
+                    showMessage('error', 'Failed to delete account data.');
                     setIsLoading(false);
                 }
             }
@@ -261,12 +374,100 @@ const Settings = () => {
                 />
             </SettingSection>
 
+            <div className="mb-8">
+                <div className="flex items-center justify-between mb-3 px-1">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-textMuted">
+                        AI Engine (Google AI Studio)
+                    </h3>
+                    <span className={`text-[11px] font-mono px-2.5 py-0.5 rounded-full border ${
+                        hasSavedGeminiKey
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                            : 'bg-white/5 border-white/10 text-textMuted'
+                    }`}>
+                        {hasSavedGeminiKey ? `Gemini (${geminiModel})` : 'Local Ollama'}
+                    </span>
+                </div>
+                <form
+                    onSubmit={handleSaveGeminiConfig}
+                    className="glass-card border border-white/5 p-4 space-y-4"
+                >
+                    <p className="text-xs text-textMuted leading-relaxed">
+                        Add your Google AI Studio Gemini API key to use S.P.I.D.E.Y from mobile or any browser without local Ollama. Stored only in this device&apos;s browser.
+                    </p>
+                    <div>
+                        <label className="block text-[11px] font-bold text-textMuted uppercase mb-1.5">
+                            AI Studio API Key
+                        </label>
+                        <div className="relative flex items-center">
+                            <Key size={16} className="absolute left-3.5 text-textMuted pointer-events-none" />
+                            <input
+                                type={showGeminiKey ? 'text' : 'password'}
+                                value={geminiApiKey}
+                                onChange={(e) => setGeminiApiKey(e.target.value)}
+                                placeholder="AQ... or AIza..."
+                                autoComplete="off"
+                                className="w-full bg-surfaceHighlight border border-white/10 rounded-lg py-2.5 pl-10 pr-10 text-sm text-white placeholder:text-textMuted/50 focus:outline-none focus:border-white/40 font-mono"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowGeminiKey((v) => !v)}
+                                aria-label={showGeminiKey ? 'Hide API key' : 'Show API key'}
+                                className="absolute right-3 text-textMuted hover:text-white transition-colors"
+                            >
+                                {showGeminiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-[11px] font-bold text-textMuted uppercase mb-1.5">
+                            Gemini Model
+                        </label>
+                        <select
+                            value={geminiModel}
+                            onChange={(e) => setGeminiModel(e.target.value)}
+                            className="w-full bg-surfaceHighlight border border-white/10 rounded-lg py-2.5 px-3 text-sm text-white focus:outline-none focus:border-white/40 font-mono"
+                        >
+                            <option value="gemini-3.5-flash">gemini-3.5-flash (Recommended)</option>
+                            <option value="gemini-3.5-pro">gemini-3.5-pro (Best Reasoning)</option>
+                            <option value="gemini-3.8-flash">gemini-3.8-flash (Fast)</option>
+                            <option value="gemini-4-hydrogen">gemini-4-hydrogen</option>
+                        </select>
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                        <button
+                            type="submit"
+                            className="flex-1 bg-white hover:bg-gray-200 text-black font-bold py-2.5 px-4 rounded-lg transition-colors text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+                        >
+                            <Save size={15} />
+                            Save Key
+                        </button>
+                        {hasSavedGeminiKey && (
+                            <button
+                                type="button"
+                                onClick={handleClearGeminiConfig}
+                                className="bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 font-bold py-2.5 px-3.5 rounded-lg transition-colors text-xs uppercase tracking-wider flex items-center justify-center gap-1.5"
+                            >
+                                <Trash2 size={15} />
+                                Use Ollama
+                            </button>
+                        )}
+                    </div>
+                </form>
+            </div>
+
             <SettingSection title="Session">
                 <SettingItem icon={LogOut} label="Log Out" onClick={logout} destructive />
             </SettingSection>
 
             <div className="mt-12">
                 <SettingSection title="Danger Zone">
+                    <SettingItem
+                        icon={Database}
+                        label="Delete All Database Data"
+                        value="Tasks, Habits, Chats, Memories, Reminders, Learning"
+                        onClick={handleDeleteAllDatabaseData}
+                        destructive
+                    />
                     <SettingItem
                         icon={AlertTriangle}
                         label="Delete Account"

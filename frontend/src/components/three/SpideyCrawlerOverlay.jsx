@@ -321,18 +321,18 @@ export default function SpideyCrawlerOverlay() {
         };
         window.addEventListener('resize', onResize);
 
-        const clock = new THREE.Clock();
+        const timer = new THREE.Timer();
         let rafId = 0;
         let lastAiState = 'idle';
 
-        const animate = () => {
+        const animate = (timestamp) => {
             rafId = requestAnimationFrame(animate);
+            timer.update(timestamp);
             if (document.hidden) {
-                clock.getDelta();
                 return;
             }
 
-            const dt = Math.min(clock.getDelta(), 0.05);
+            const dt = Math.min(timer.getDelta(), 0.05);
             if (companionRef.current) {
                 companionRef.current.mixer.update(dt);
             }
