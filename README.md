@@ -110,19 +110,27 @@ $env:SPIDEY_ALLOW_HUB = "1"
 
 ## How to Run the Program
 
-### Option A: One-Click Windows Launcher (Recommended)
+### Option A: S.P.I.D.E.Y. Desktop Control Center GUI (Recommended)
 
-Run `start.bat` from the project root:
+Instead of opening multiple terminal windows, launch the **S.P.I.D.E.Y. Control Center** desktop GUI:
+
+- **Double-click** `Spidey Control Center.pyw` (or the **Spidey Control Center** Desktop shortcut, or `start.bat`), **or** run:
 
 ```powershell
-.\start.bat
+.\.venv\Scripts\pythonw.exe spidey_launcher.py
 ```
 
-`start.bat` automatically:
-1. Activates `.venv`
-2. Starts `ollama serve` in the background (if not already running)
-3. Starts the **FastAPI Backend** on `http://127.0.0.1:8000`
-4. Starts the **Vite Frontend** on `http://localhost:5173`
+The **Control Center** provides a single dark-mode supervisor window to start, monitor, and manage the entire stack with zero background console windows:
+1. **Global Controls:** `▶ START ALL`, `■ STOP ALL`, `↻ RESTART`, and `↗ OPEN WEB UI` (`http://localhost:5173`).
+2. **Service Cards & Health Checks:**
+   - **1. Ollama LLM (`127.0.0.1:11434`):** Live status (`RUNNING` / `EXTERNAL` / `STOPPED`), installed model verification, and one-click `Pull Model`.
+   - **2. Backend API (`127.0.0.1:8000`):** Start / Stop / Restart, live PID tracking, and `/api/health` + SQLite DB status check.
+   - **3. Web Frontend (`http://localhost:5173`):** Start / Stop / Restart / Open, live Vite dev server status.
+3. **Live Configuration Strip (`.env`):** Edit `OLLAMA_MODEL`, `LLM_BACKEND` (`ollama` / `gemini`), `TTS_BACKEND` (`phonon` / `sapi`), proactive `COACH (MIN)` interval, `Auto-open browser`, and trigger `Run Tests` (`pytest`) directly from the GUI.
+4. **Tabbed Live Log Console:** Real-time color-coded stdout/stderr streaming across `ALL LOGS`, `BACKEND`, `FRONTEND`, `OLLAMA`, and `LAUNCHER`.
+5. **Clean Process Tree Shutdown:** Stopping a service or closing the Control Center cleanly terminates the managed process tree (`taskkill /F /T`) so no orphaned `uvicorn` or `node` processes remain on ports `8000` or `5173`.
+
+*(If you ever prefer the legacy multi-terminal batch mode, run `.\start.bat --cli`.)*
 
 ### Option B: Run Manually in Two Terminals
 
@@ -151,9 +159,9 @@ Then open **http://localhost:5173** in your browser.
 | `02` | `/habits` | **Habits** | Create, edit, and track daily habits, streaks, and XP |
 | `03` | `/todos` | **Tasks** | Priority task management with search, filters, due dates, and AI-driven updates |
 | `04` | `/reminders` | **Reminders & Memory** | Scheduled reminders (one-time & recurring) + long-term semantic memories |
-| `05` | `/learning` | **Learning** | Structured study roadmaps, topic status tracking, and AI study suggestions |
+| `05` | `/learning` | **Learning** | Structured study roadmaps, bulk sub-topic paste & auto-division, topic status tracking, and AI study suggestions |
 | `06` | `/analytics` | **Analytics** | Total Productivity % (habits, tasks, learning), per-roadmap learning progress, streaks, yearly heatmap, and charts |
-| `07` | `/settings` | **Settings** | Theme selection (Dark / Midnight / Light), profile, notifications, and data controls |
+| `07` | `/settings` | **Settings** | Theme selection (Dark / Midnight / Light), profile, Gemini BYOK key, notifications, and full SQLite database reset (`Delete All Database Data`) |
 
 ### Interactive 3D Companion
 - **Top-Down Page Crawler:** S.P.I.D.E.Y.'s animated 3D GLB model (`spidey-ai-companion-animated.glb`) patrols across the workspace, traveling both over and underneath UI cards/sections.
