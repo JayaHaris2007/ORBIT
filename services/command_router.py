@@ -579,16 +579,21 @@ def _handle_local_command(prompt: str, chat_id: str) -> tuple[str, str] | None:
 
     task_request = _app()._parse_task_create(prompt)
     if task_request:
-        title, priority = task_request
-        task = _app().memory_store.create_task(title, priority)
+        raw_title, priority = task_request
+        title, due_at = _app()._extract_task_due_date(raw_title)
+        task = _app().memory_store.create_task(title, priority, due_at=due_at)
         _app()._run_learning_hook(lambda: _app()._learning_suggest_for_task(task["id"]))
         open_count = len(_app().memory_store.list_tasks(include_completed=False))
-        return (
-            _app().assistant_tone.task_created(
-                task["title"], task["priority"], open_count, name=name
-            ),
-            "local-task-manager",
+        reply = _app().assistant_tone.task_created(
+            task["title"], task["priority"], open_count, name=name
         )
+        if task.get("due_at"):
+            try:
+                due_label = datetime.fromisoformat(task["due_at"]).strftime("%d %b %Y")
+            except ValueError:
+                due_label = str(task["due_at"])[:10]
+            reply = f"{reply} (Due **{due_label}**.)"
+        return (reply, "local-task-manager")
 
     if _app()._is_task_list_request(prompt):
         normalized_prompt = _app()._normalize_command(prompt).lower()
@@ -626,14 +631,11 @@ def _handle_local_command(prompt: str, chat_id: str) -> tuple[str, str] | None:
                 _app().assistant_tone.task_renamed(updated["title"]),
                 "local-task-manager",
             )
-        try:
-            parsed_due = _app()._parse_reminder_time(value)
-        except (TypeError, ValueError):
-            parsed_due = None
-        if parsed_due is None:
+        parsed_due_iso = _app()._parse_task_due_date(value)
+        if parsed_due_iso is None:
             raise ValueError(f"I could not understand the due date: {value}.")
         updated = _app().memory_store.update_task(
-            task["id"], due_at=parsed_due.isoformat()
+            task["id"], due_at=parsed_due_iso
         )
         return (
             _app().assistant_tone.task_due(updated["title"], updated["due_at"]),

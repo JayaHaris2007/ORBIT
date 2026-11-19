@@ -211,6 +211,83 @@ def _web_search_reply(query: str) -> tuple[str, str]:
     return "\n".join(lines).strip(), "web-search"
 
 
+_TASK_DMY_DATE = re.compile(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$")
+_TASK_YMD_DATE = re.compile(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$")
+_TASK_DATE_HINT = re.compile(
+    r"(?:\d{1,4}[-/]\d{1,2}[-/]\d{2,4}"
+    r"|\b(?:today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    r"|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
+    r"|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    r"|next\s+\w+|this\s+\w+|in\s+\d+\s+(?:days?|weeks?|months?|hours?))\b)",
+    re.IGNORECASE,
+)
+_TASK_DUE_CLAUSE = re.compile(
+    r"^(?P<title>.+?)\s+(?:due\s+(?:on|by|date)?|by|before|until|deadline|on)\s+(?P<when>.+)$",
+    re.IGNORECASE,
+)
+_TASK_TRAILING_DAY = re.compile(
+    r"^(?P<title>.+?)\s+(?P<when>today|tomorrow|tonight)$",
+    re.IGNORECASE,
+)
+
+
+def _parse_task_due_date(value: str) -> str | None:
+    """Parse a task due date string into ISO format, honoring DD-MM-YYYY and YYYY-MM-DD."""
+    raw = (value or "").strip(" .,;:!?\"'")
+    if not raw:
+        return None
+    tz = _app().LOCAL_TIMEZONE
+
+    ymd = _TASK_YMD_DATE.fullmatch(raw)
+    if ymd:
+        try:
+            dt = datetime(int(ymd.group(1)), int(ymd.group(2)), int(ymd.group(3)), tzinfo=tz)
+            return dt.isoformat()
+        except ValueError:
+            return None
+
+    dmy = _TASK_DMY_DATE.fullmatch(raw)
+    if dmy:
+        day, month, year = int(dmy.group(1)), int(dmy.group(2)), int(dmy.group(3))
+        try:
+            dt = datetime(year, month, day, tzinfo=tz)
+            return dt.isoformat()
+        except ValueError:
+            # Fall back to MM-DD-YYYY if day > 12 wasn't valid as DMY (e.g. month > 12)
+            try:
+                dt = datetime(year, day, month, tzinfo=tz)
+                return dt.isoformat()
+            except ValueError:
+                return None
+
+    try:
+        parsed = _app()._parse_reminder_time(raw)
+    except (TypeError, ValueError):
+        parsed = None
+    return parsed.isoformat() if parsed is not None else None
+
+
+def _extract_task_due_date(title: str) -> tuple[str, str | None]:
+    """Split a trailing due-date clause (e.g. 'by 20-11-2026', 'due tomorrow') from a task title."""
+    cleaned = title.strip()
+    if not cleaned:
+        return cleaned, None
+
+    for pattern in (_TASK_DUE_CLAUSE, _TASK_TRAILING_DAY):
+        m = pattern.fullmatch(cleaned)
+        if not m:
+            continue
+        base_title = m.group("title").strip(" :-'\",")
+        when_raw = m.group("when").strip(" .,;:!?\"'")
+        if not base_title or not _TASK_DATE_HINT.search(when_raw):
+            continue
+        due_iso = _parse_task_due_date(when_raw)
+        if due_iso:
+            return base_title, due_iso
+
+    return cleaned, None
+
+
 def _parse_task_create(prompt: str) -> tuple[str, str] | None:
     normalized = _app()._normalize_command(prompt)
     match = re.fullmatch(

@@ -212,6 +212,7 @@ from services.llm import (  # noqa: E402, F401
 from services.productivity_parsers import (  # noqa: E402, F401
     _complete_habit,
     _complete_task,
+    _extract_task_due_date,
     _find_habit,
     _find_task_reference,
     _format_habit_list,
@@ -233,6 +234,7 @@ from services.productivity_parsers import (  # noqa: E402, F401
     _parse_task_completion,
     _parse_task_create,
     _parse_task_delete,
+    _parse_task_due_date,
     _parse_task_reopen,
     _parse_task_update,
     _parse_web_search_query,
