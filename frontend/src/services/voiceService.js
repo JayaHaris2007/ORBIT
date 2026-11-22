@@ -7,9 +7,24 @@ export class AudioQueue {
         this.freqData = null;
         this.queue = [];
         this.playing = null;
+        this.lastEndedAt = 0;
         this.epoch = 0;
         this.onIdle = null;
         this.onPlay = null;
+        this.idleListeners = new Set();
+    }
+
+    addIdleListener(fn) {
+        this.idleListeners.add(fn);
+        return () => this.idleListeners.delete(fn);
+    }
+
+    isPlaybackActive(tailMs = 500) {
+        if (this.playing || this.queue.length > 0) return true;
+        if (this.lastEndedAt > 0 && typeof performance !== 'undefined') {
+            return (performance.now() - this.lastEndedAt) < tailMs;
+        }
+        return false;
     }
 
     ensureContext() {
@@ -70,7 +85,9 @@ export class AudioQueue {
         const buf = this.queue.shift();
         if (!buf) {
             this.playing = null;
+            this.lastEndedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
             this.onIdle?.();
+            for (const fn of this.idleListeners) fn();
             return;
         }
         const src = this.ctx.createBufferSource();
@@ -158,7 +175,7 @@ export function summarizeForSpeechClient(text, maxItems = 4, maxProseChars = 260
     const sectionHeaderRe = /^(?:#{1,6}\s*)?([A-Za-z][A-Za-z0-9\s/&-]{0,30}):\s*$/;
     const pastLabels = ['past', 'completed', 'archived', 'previous', 'ended', 'closed', 'done'];
     const bulletRe = /^([-*+•]|\d+[.)])\s+/;
-    const dashSplitRe = /\s+(?:—|–|--|\s-\s)\s+/;
+    const dashSplitRe = /\s+(?:—|–|--|-)\s+/;
 
     const introLines = [];
     const outroLines = [];

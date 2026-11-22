@@ -688,8 +688,11 @@ def _is_advice_question(normalized_prompt: str) -> bool:
 
 def _is_task_list_request(prompt: str) -> bool:
     normalized_prompt = _app()._normalize_command(prompt).lower()
-    # Habit and reminder queries belong to their own handlers.
-    if re.search(r"\b(?:habits?|reminders?)\b", normalized_prompt):
+    # Habit, reminder, analytics, overview, and learning focus queries belong to their own handlers / LLM tools.
+    if re.search(
+        r"\b(?:habits?|reminders?|analytics?|telemetry|overview|roadmaps?|learning|study|focus\s+more|improve|average)\b",
+        normalized_prompt,
+    ):
         return False
     if _app()._is_advice_question(normalized_prompt):
         return False

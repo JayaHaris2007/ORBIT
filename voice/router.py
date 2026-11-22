@@ -232,7 +232,7 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
         sentences_list = sentences.split_sentences(cleaned, max_chars=config.MAX_SENTENCE_CHARS)
         if not sentences_list:
             return
-        if mode != "live" and not _read_speak_setting():
+        if mode not in ("live", "ptt") and not _read_speak_setting():
             return
 
         if not tts_engine.available:
@@ -356,6 +356,18 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                     speech_detected = False
                     await send_state(session.VState.IDLE)
 
+                elif msg_type == "commit":
+                    if voice_sess.state == session.VState.LISTENING and len(voice_sess.pcm) >= 3200:
+                        speech_detected = False
+                        silence_start_time = 0.0
+                        voice_sess.state = session.VState.TRANSCRIBING
+                        task = asyncio.create_task(process_utterance())
+                        voice_sess.tasks.add(task)
+                    else:
+                        voice_sess.pcm.clear()
+                        speech_detected = False
+                        await send_state(session.VState.IDLE)
+
                 elif msg_type == "interrupt":
                     voice_sess.reset()
                     is_speaking = False
@@ -382,6 +394,10 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                     continue
 
                 voice_sess.pcm.extend(pcm_chunk)
+
+                # In push-to-talk mode, wait for explicit "commit" on key release
+                if mode == "ptt":
+                    continue
 
                 if energy >= config.VAD_ENERGY_THRESHOLD:
                     if not speech_detected:

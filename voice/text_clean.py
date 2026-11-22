@@ -53,8 +53,12 @@ _SECTION_HEADER = re.compile(
 )
 _PAST_SECTION_LABELS = {"past", "completed", "archived", "previous", "ended", "closed", "done"}
 
-# Dash-separated detail lines (e.g. "Title — Date (Mode) — Details")
-_DASH_DETAIL_SPLIT = re.compile(r"\s+(?:—|–|--|\s-\s)\s+")
+# Dash-separated detail lines (e.g. "Title — Date (Mode) — Details" or "Title - Details")
+_DASH_DETAIL_SPLIT = re.compile(r"\s+(?:—|–|--|-)\s+")
+_FRACTION_PATTERN = re.compile(r"\b(\d+)\s*/\s*(\d+)\b")
+_FILE_EXT_PATTERN = re.compile(r"\b([A-Za-z0-9_]+)\.(cpp|hpp|py|js|jsx|ts|tsx|java|json|md|sql|html|css)\b")
+_CPP_PATTERN = re.compile(r"\bC\+\+(?![A-Za-z0-9])")
+_CSHARP_PATTERN = re.compile(r"\bC#(?![A-Za-z0-9])")
 
 
 def _replace_rupee(match: re.Match[str]) -> str:
@@ -102,7 +106,14 @@ def clean_text_for_speech(text: str) -> str:
     text = _EMPHASIS.sub("", text)
     text = _STRIKETHROUGH.sub("", text)
 
-    # 6. Currency and spoken math/symbols
+    # 6. Currency, technical terms, and spoken math/symbols
+    text = _CPP_PATTERN.sub("C plus plus", text)
+    text = _CSHARP_PATTERN.sub("C sharp", text)
+    text = _FILE_EXT_PATTERN.sub(
+        lambda m: f"{m.group(1).replace('_', ' ')} dot {m.group(2)}",
+        text,
+    )
+    text = _FRACTION_PATTERN.sub(r"\1 out of \2", text)
     text = _RUPEE_AMOUNT.sub(_replace_rupee, text)
     text = _DOLLAR_AMOUNT.sub(r"\1 dollars", text)
     text = _PERCENT_AMOUNT.sub(r"\1 percent", text)
@@ -114,6 +125,8 @@ def clean_text_for_speech(text: str) -> str:
     text = text.replace("°F", " degrees Fahrenheit")
     text = text.replace("°", " degrees")
     text = text.replace("=", " equals ")
+    text = re.sub(r"\s+[—–-]\s+", ", ", text)
+    text = re.sub(r"(?<=[A-Za-z0-9])_(?=[A-Za-z0-9])", " ", text)
 
     # 7. Strip emojis and odd unicode symbols
     text = _EMOJI_PATTERN.sub("", text)
@@ -178,6 +191,91 @@ def summarize_for_speech(text: str, max_items: int = 4, max_prose_chars: int = 2
     raw_lines = [ln.strip() for ln in without_code.splitlines() if ln.strip()]
     if not raw_lines:
         return clean_text_for_speech(text)
+
+    # Check if this is a multi-section analytical/overview summary (e.g., Tasks + Habits + Learning + Focus Areas)
+    named_sections: list[tuple[str, list[str]]] = []
+    section_intro: list[str] = []
+    closing_question = ""
+    active_sec_name: str | None = None
+    active_sec_lines: list[str] = []
+
+    _INLINE_SECTION = re.compile(
+        r"^(?:#{1,6}\s*)?(?P<label>(?:Tasks?|Habits?|Learning(?:\s+Progress|\s+Roadmap)?|Focus(?:\s+Areas?)?|Gamification|Reminders?|Summary|Overview|Recommendations?)(?:\s*\([^)]*\))?):\s*(?P<rest>.*)$",
+        re.IGNORECASE,
+    )
+
+    for ln in raw_lines:
+        plain_ln = _EMPHASIS.sub("", ln).strip()
+        if not plain_ln:
+            continue
+        m_inline = _INLINE_SECTION.match(plain_ln)
+        if m_inline:
+            if active_sec_name is not None:
+                named_sections.append((active_sec_name, active_sec_lines))
+            active_sec_name = m_inline.group("label").strip()
+            rest = m_inline.group("rest").strip()
+            active_sec_lines = [rest] if rest else []
+            continue
+        if plain_ln.endswith("?") and len(plain_ln) <= 130 and active_sec_name is not None:
+            closing_question = plain_ln
+            continue
+        if active_sec_name is None:
+            section_intro.append(plain_ln)
+        else:
+            active_sec_lines.append(plain_ln)
+
+    if active_sec_name is not None:
+        named_sections.append((active_sec_name, active_sec_lines))
+
+    # Case 0: Multi-section analytics / overview briefing — speak concise natural highlights
+    if len(named_sections) >= 2:
+        focus_sections = [
+            (lbl, lines)
+            for lbl, lines in named_sections
+            if any(k in lbl.lower() for k in ("focus", "recommend", "improve", "summary"))
+        ]
+        spoken_parts: list[str] = []
+        if section_intro:
+            lead = section_intro[0].rstrip(":. ")
+            if len(lead) <= 80:
+                spoken_parts.append(f"{lead}.")
+
+        # Prioritize focus/recommendations if present, plus key status from habits/learning/tasks
+        selected = []
+        for lbl, lines in named_sections:
+            low = lbl.lower()
+            if "gamification" in low:
+                continue
+            if focus_sections and any(k in low for k in ("focus", "recommend")):
+                items = [_extract_item_headline(x) for x in lines if x.strip()]
+                items = [x for x in items if x][:3]
+                if items:
+                    selected.append(f"Your main focus areas are {_join_natural(items)}.")
+                continue
+            # Keep first concise takeaway sentence for status sections
+            if lines and len(selected) < 3:
+                first_line = _BULLETS.sub("", _ORDERED_LIST.sub("", lines[0])).strip()
+                first_sent = re.split(r"(?<=[.!?])\s+", first_line)[0].rstrip(".")
+                if first_sent and len(first_sent) <= 115:
+                    if low.startswith(("task", "learning")):
+                        selected.append(f"{first_sent}.")
+                    elif low.startswith("habit"):
+                        # Summarize missed/pending habit if mentioned in lines
+                        missed = next(
+                            (l for l in lines if re.search(r"\b(not done|missed|pending|uncompleted)\b", l, re.I)),
+                            None,
+                        )
+                        if missed:
+                            habit_name = _extract_item_headline(missed)
+                            selected.append(f"For habits, {habit_name} is still pending today.")
+                        else:
+                            selected.append(f"For habits, {first_sent}.")
+
+        if selected:
+            spoken_parts.extend(selected[:3])
+            if closing_question:
+                spoken_parts.append(closing_question)
+            return clean_text_for_speech(" ".join(spoken_parts))
 
     # Check if this is a structured list or dash-detailed response
     intro_lines: list[str] = []

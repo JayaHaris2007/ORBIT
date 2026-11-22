@@ -101,7 +101,7 @@ export function useVoice() {
     }, [audioQueue]);
 
     const speak = useCallback(
-        async (text) => {
+        async (text, options = {}) => {
             if (!speakEnabled || !text || !text.trim() || !audioQueue) return;
 
             window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
@@ -115,7 +115,9 @@ export function useVoice() {
             audioQueue.stop();
             const currentEpoch = audioQueue.epoch;
 
-            const condensed = summarizeForSpeechClient(text);
+            const condensed = options.alreadySummarized
+                ? text.trim()
+                : summarizeForSpeechClient(text);
             const sentences = splitSentencesClient(condensed);
             if (!sentences.length) return;
 

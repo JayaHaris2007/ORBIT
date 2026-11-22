@@ -11,6 +11,7 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
     const [mode, setMode] = useState('live');
     const [timing, setTiming] = useState({ speechEnd: 0, transcript: 0, firstSentence: 0, firstAudio: 0, total: 0 });
 
+    const modeRef = useRef('live');
     const wsRef = useRef(null);
     const micStreamRef = useRef(null);
     const audioContextRef = useRef(null);
@@ -81,6 +82,16 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
         }
     }, []);
 
+    const commitUtterance = useCallback(() => {
+        cleanupAudioCapture();
+        emitBrainAudioLevel(0);
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            try {
+                wsRef.current.send(JSON.stringify({ type: 'commit' }));
+            } catch { /* ignore */ }
+        }
+    }, [cleanupAudioCapture]);
+
     const updateChatId = useCallback((chatId) => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && chatId) {
             try {
@@ -93,6 +104,7 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
         async (sessionMode = 'live', chatId = null) => {
             stopSession();
             setMode(sessionMode);
+            modeRef.current = sessionMode;
             setError(null);
             setTranscript('');
             setReply('');
@@ -138,6 +150,12 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                 };
 
                 workletNode.port.onmessage = (event) => {
+                    // Gate mic capture while browser TTS speakers are playing (+500ms echo tail)
+                    // so Spidey never hears its own voice or cuts itself off mid-sentence.
+                    if (queueRef.current?.isPlaybackActive?.(500)) {
+                        emitBrainAudioLevel(0);
+                        return;
+                    }
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.send(event.data); // Binary PCM frame (100 ms)
                     }
@@ -163,10 +181,20 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                         try {
                             const data = JSON.parse(event.data);
                             if (data.type === 'state') {
-                                setState(data.value);
-                                emitBrainState(data.value);
+                                const stillSpeakingLocally =
+                                    (data.value === 'listening' || data.value === 'idle')
+                                    && queueRef.current?.isPlaybackActive?.(0);
+                                setState(stillSpeakingLocally ? 'speaking' : data.value);
+                                emitBrainState(stillSpeakingLocally ? 'speaking' : data.value);
                                 if (data.value === 'transcribing') {
                                     timingRef.current.speechEnd = performance.now();
+                                }
+                                if (data.value === 'idle' && sessionMode === 'ptt') {
+                                    cleanupAudioCapture();
+                                    emitBrainAudioLevel(0);
+                                    try {
+                                        ws.close();
+                                    } catch { /* ignore */ }
                                 }
                             } else if (data.type === 'transcript') {
                                 setTranscript(data.text);
@@ -230,6 +258,20 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
     );
 
     useEffect(() => {
+        const q = queueRef.current;
+        if (!q?.addIdleListener) return undefined;
+        return q.addIdleListener(() => {
+            const wsOpen = wsRef.current && wsRef.current.readyState === WebSocket.OPEN;
+            if (wsOpen && modeRef.current === 'live') {
+                setState('listening');
+                emitBrainState('listening');
+            } else {
+                setState((prev) => (prev === 'speaking' ? 'idle' : prev));
+            }
+        });
+    }, []);
+
+    useEffect(() => {
         return () => {
             stopSession();
         };
@@ -244,6 +286,7 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
         timing,
         startSession,
         stopSession,
+        commitUtterance,
         interrupt,
         updateChatId,
         isIdle: state === 'idle'
