@@ -140,3 +140,35 @@ def test_delete_all_database_data_endpoint(temp_db):
     assert app.memory_store.list_memories() == []
     assert app.memory_store.get_gamification()["xp"] == 0
 
+
+def test_proactive_checkin_mirrors_to_discord(temp_db):
+    web_chat = app.memory_store.create_chat()
+    discord_chat = app.memory_store.get_or_create_external_chat("discord", "123456789")
+    app.memory_store.create_task("Study pointers in C++", priority="high")
+
+    daytime = datetime(2026, 11, 20, 10, 0, tzinfo=app.LOCAL_TIMEZONE)
+    res = app.deliver_proactive_checkin(chat_id=web_chat["id"], force=True, now=daytime)
+    assert res["nudge"] is True
+    assert res["discord_delivered"] == 1
+
+    discord_notifs = app.memory_store.list_notifications(discord_chat["id"], after_id=0)
+    assert len(discord_notifs) == 1
+    assert "Study pointers in C++" in discord_notifs[0]["content"]
+
+
+def test_proactive_checkin_uses_natural_friend_tone_without_robotic_labels(temp_db):
+    chat = app.memory_store.create_chat()
+    app.memory_store.create_task("learning C++ basics", priority="medium")
+    app.memory_store.create_habit("Learning DSA", "Code", 1)
+    app.init_learning_module("local")
+
+    daytime = datetime(2026, 11, 21, 14, 0, tzinfo=app.LOCAL_TIMEZONE)
+    for cat in ("task", "habit", "learning", "combined"):
+        checkin = app.build_proactive_checkin(chat["id"], preferred_category=cat, now=daytime)
+        assert checkin is not None
+        msg = checkin["message"]
+        # No robotic labels or bullet-list templates
+        for forbidden in ("Habit push:", "Study push:", "accountability check-in:", "- Top Task:", "- Daily Habit:"):
+            assert forbidden.lower() not in msg.lower(), f"Robotic phrase {forbidden!r} found in {msg!r}"
+
+

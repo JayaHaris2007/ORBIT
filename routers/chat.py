@@ -80,7 +80,9 @@ async def generate(payload: dict[str, Any] = Body(...)):
         context = a.memory_store.build_context(chat_id, None, prompt)
         model_prompt = a.resolve_short_follow_up(prompt, context)
         memories = a._memories_for_prompt(model_prompt)
-        history = [m for m in context if m.get("content") != model_prompt]
+        history = list(context)
+        if history and history[-1].get("role") == "user" and history[-1].get("content") == prompt.strip():
+            history.pop()
         try:
             agent_result = await asyncio.to_thread(
                 a.respond_with_tools,
@@ -176,7 +178,9 @@ async def generate_stream(payload: dict[str, Any] = Body(...)):
             context = a.memory_store.build_context(chat_id, None, prompt)
             model_prompt = a.resolve_short_follow_up(prompt, context)
             memories = a._memories_for_prompt(model_prompt)
-            history = [m for m in context if m.get("content") != model_prompt]
+            history = list(context)
+            if history and history[-1].get("role") == "user" and history[-1].get("content") == prompt.strip():
+                history.pop()
 
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 

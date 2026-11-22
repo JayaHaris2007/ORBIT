@@ -23,10 +23,13 @@ TOPIC_STATUSES = ("not_started", "learning", "completed", "on_hold")
 LINK_STATES = ("suggested", "confirmed", "rejected")
 LINK_SOURCES = ("rule", "embedding", "llm", "manual")
 ACTIVITY_KINDS = ("planned", "started", "completed", "postponed")
+CODE_FILE_STATES = ("empty", "wip", "practiced")
+CODE_SUGGESTION_STATES = ("pending", "confirmed", "dismissed")
 
 Category = Literal["academic", "technical", "personal"]
 TopicStatus = Literal["not_started", "learning", "completed", "on_hold"]
 LinkState = Literal["suggested", "confirmed", "rejected"]
+CodeSuggestionState = Literal["pending", "confirmed", "dismissed"]
 
 
 class RoadmapIn(BaseModel):
@@ -86,6 +89,21 @@ class LinkPatch(BaseModel):
 
 class SettingsPatch(BaseModel):
     nudges_enabled: StrictBool
+
+
+class FolderLinkIn(BaseModel):
+    folder_path: str = Field(min_length=1, max_length=1000)
+    enabled: StrictBool = True
+
+
+class CodeSuggestionPatch(BaseModel):
+    state: Literal["confirmed", "dismissed"]
+
+
+class CodeRagQueryIn(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    roadmap_id: int | None = None
+    limit: int = Field(default=5, ge=1, le=15)
 
 _database_path: Path | None = None
 
@@ -163,8 +181,92 @@ def init(database_path: Path) -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS learning_folders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roadmap_id INTEGER NOT NULL UNIQUE REFERENCES roadmaps(id)
+                    ON DELETE CASCADE,
+                folder_path TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_synced_at TEXT,
+                last_sync_summary TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS learning_code_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roadmap_id INTEGER NOT NULL REFERENCES roadmaps(id)
+                    ON DELETE CASCADE,
+                rel_path TEXT NOT NULL,
+                abs_path TEXT NOT NULL,
+                language TEXT NOT NULL DEFAULT '',
+                content_hash TEXT NOT NULL DEFAULT '',
+                file_size INTEGER NOT NULL DEFAULT 0,
+                line_count INTEGER NOT NULL DEFAULT 0,
+                code_lines INTEGER NOT NULL DEFAULT 0,
+                has_compiled_artifact INTEGER NOT NULL DEFAULT 0,
+                file_state TEXT NOT NULL DEFAULT 'wip'
+                    CHECK(file_state IN ('empty', 'wip', 'practiced')),
+                concepts_json TEXT NOT NULL DEFAULT '[]',
+                symbols_json TEXT NOT NULL DEFAULT '[]',
+                summary TEXT NOT NULL DEFAULT '',
+                modified_at TEXT NOT NULL,
+                indexed_at TEXT NOT NULL,
+                UNIQUE(roadmap_id, rel_path)
+            );
+            CREATE INDEX IF NOT EXISTS learning_code_files_roadmap_idx
+                ON learning_code_files(roadmap_id, modified_at DESC);
+            CREATE TABLE IF NOT EXISTS learning_code_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL REFERENCES learning_code_files(id)
+                    ON DELETE CASCADE,
+                roadmap_id INTEGER NOT NULL REFERENCES roadmaps(id)
+                    ON DELETE CASCADE,
+                rel_path TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL DEFAULT 0,
+                start_line INTEGER NOT NULL DEFAULT 1,
+                end_line INTEGER NOT NULL DEFAULT 1,
+                content TEXT NOT NULL,
+                concepts TEXT NOT NULL DEFAULT '',
+                embedding BLOB
+            );
+            CREATE INDEX IF NOT EXISTS learning_code_chunks_file_idx
+                ON learning_code_chunks(file_id, chunk_index);
+            CREATE INDEX IF NOT EXISTS learning_code_chunks_roadmap_idx
+                ON learning_code_chunks(roadmap_id);
+            CREATE TABLE IF NOT EXISTS topic_code_evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                roadmap_id INTEGER NOT NULL REFERENCES roadmaps(id)
+                    ON DELETE CASCADE,
+                topic_id INTEGER NOT NULL REFERENCES topics(id)
+                    ON DELETE CASCADE,
+                confidence REAL NOT NULL DEFAULT 0.0,
+                evidence_files TEXT NOT NULL DEFAULT '[]',
+                reason TEXT NOT NULL DEFAULT '',
+                suggestion_state TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(suggestion_state IN ('pending', 'confirmed', 'dismissed')),
+                updated_at TEXT NOT NULL,
+                UNIQUE(roadmap_id, topic_id)
+            );
+            CREATE INDEX IF NOT EXISTS topic_code_evidence_state_idx
+                ON topic_code_evidence(suggestion_state, roadmap_id);
             """
         )
+        # Optional FTS5 virtual table for fast BM25 code RAG retrieval
+        try:
+            connection.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS learning_code_chunks_fts USING fts5(
+                    chunk_id UNINDEXED,
+                    roadmap_id UNINDEXED,
+                    rel_path,
+                    concepts,
+                    content,
+                    tokenize='porter unicode61'
+                );
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
 
 
 def database_path() -> Path:

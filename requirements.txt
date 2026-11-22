@@ -19,14 +19,18 @@ dateparser==1.5.0
 regex==2026.9.29
 tavily-python==0.8.5
 
-# Voice stack (Gradium Phonon CPU TTS + SpeechRecognition STT)
+# Voice stack (Gradium Phonon CPU TTS + SpeechRecognition STT + Resampling)
 ptts==0.6.0
 SpeechRecognition==3.17.0
 soundfile==0.14.0
 numpy==2.5.4
+scipy==1.18.1
 
-# Discord Bot Integration
+# Discord Bot & Server Voice Channel Integration
 discord.py==2.7.1
+PyNaCl==1.5.0
+davey==0.2.0
+discord-ext-voice-recv==0.5.2a179
 
 # Testing & Linting
 pytest==9.2.0

@@ -17,7 +17,8 @@ from agent.deps import AgentDeps
 
 # Affirmative patterns
 _AFFIRMATIVE_PATTERN = re.compile(
-    r"^(?:yes|yeah|yep|yup|confirm|do\s+it|ok\s+delete\s+it|okay\s+delete\s+it|sure|proceed|please\s+do|affirmative)(?:[\s.!,]+.*)?$",
+    r"^(?:yes|yeah|yep|yup|y|ok|okay|confirm|do\s+it|delete\s+it|remove\s+it|go\s+ahead|"
+    r"ok\s+delete\s+it|okay\s+delete\s+it|sure|proceed|please\s+do|affirmative)(?:[\s.!,]+.*)?$",
     re.IGNORECASE,
 )
 

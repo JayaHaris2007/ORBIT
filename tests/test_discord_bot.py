@@ -186,3 +186,74 @@ def test_respond_to_prompt_sends_text_reply():
     asyncio.run(_test())
 
 
+def test_proactive_recommendation_routes_to_server_channel_and_speaks_in_voice_call():
+    """Proactive check-ins (target=None) route to the server channel and speak aloud if in a voice call."""
+    async def _test():
+        import discord
+        import discord_bot
+
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.id = 444
+        mock_channel.send = AsyncMock()
+
+        bot = discord_bot.bot
+        bot.send_dm = AsyncMock()
+
+        mock_notification = {
+            "id": 25,
+            "chat_id": "test-chat-coach",
+            "reminder_id": "task-coach-learning-discord-abc",
+            "content": "Study push: Control Flow in C++ with DSA is queued up next.",
+        }
+
+        mock_vc = MagicMock()
+        mock_vc.is_connected.return_value = True
+        mock_vc.channel = MagicMock(members=[MagicMock(id=9999)])
+        mock_session = MagicMock()
+        mock_session.guild = MagicMock(id=777)
+        mock_session.text_channel = mock_channel
+        mock_session.voice_client = mock_vc
+
+        bot.voice_manager.sessions[777] = mock_session
+        orig_speak = bot.voice_manager.speak_in_guild
+        bot.voice_manager.speak_in_guild = AsyncMock(return_value=True)
+
+        try:
+            with patch.object(bot, "get_channel", return_value=mock_channel):
+                with patch("app.memory_store.get_reminder_delivery_target", return_value=None):
+                    with patch("app.memory_store.list_notifications", return_value=[mock_notification]):
+                        with patch("app.memory_store.add_message"):
+                            with patch("app.memory_store.set_external_last_notification_id"):
+                                saved_chats = dict(bot.discord_chats)
+                                saved_ids = dict(bot.last_notification_id)
+                                try:
+                                    bot.discord_chats.clear()
+                                    bot.last_notification_id.clear()
+                                    bot.discord_chats["test-chat-coach"] = "9999"
+                                    bot.last_notification_id["test-chat-coach"] = 0
+
+                                    with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError]):
+                                        with patch.object(bot, "wait_until_ready", new_callable=AsyncMock):
+                                            try:
+                                                await bot.deliver_notifications()
+                                            except asyncio.CancelledError:
+                                                pass
+                                    await asyncio.sleep(0)
+                                finally:
+                                    bot.discord_chats = saved_chats
+                                    bot.last_notification_id = saved_ids
+
+            mock_channel.send.assert_called_once_with(
+                "<@9999> Study push: Control Flow in C++ with DSA is queued up next."
+            )
+            bot.send_dm.assert_not_called()
+            bot.voice_manager.speak_in_guild.assert_awaited_once_with(
+                777, "Study push: Control Flow in C++ with DSA is queued up next."
+            )
+        finally:
+            bot.voice_manager.sessions.pop(777, None)
+            bot.voice_manager.speak_in_guild = orig_speak
+
+    asyncio.run(_test())
+
+

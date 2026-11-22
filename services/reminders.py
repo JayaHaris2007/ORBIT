@@ -557,13 +557,21 @@ def _reminder_clarification(prompt: str) -> str | None:
 
 
 def _parse_reminder_cancel(prompt: str) -> str | None:
-    match = re.fullmatch(
-        r"(?:cancel|delete|remove|stop|forget)\s+(?:(?:the|my)\s+)?reminder\s+"
+    normalized = _app()._normalize_command(prompt)
+    patterns = (
+        r"(?:cancel|delete|remove|stop|forget|drop)\s+(?:(?:the|my)\s+)?(?:reminder|alarm|timer)\s+"
         r"(?:to\s+|for\s+|about\s+)?(.+)",
-        _app()._normalize_command(prompt),
-        re.IGNORECASE,
+        r"(?:cancel|delete|remove|stop|forget|drop)\s+(?:(?:the|my)\s+)?(.+?)\s+"
+        r"(?:(?:in|from)\s+(?:(?:the|my)\s+)?(?:reminders?|alarms?|timers?)|reminder|alarm|timer)",
     )
-    return match.group(1).strip() if match else None
+    for pattern in patterns:
+        match = re.fullmatch(pattern, normalized, re.IGNORECASE)
+        if match:
+            ref = match.group(1).strip(" \"'")
+            ref = re.sub(r"^(?:the|my)\s+", "", ref, flags=re.IGNORECASE).strip()
+            if ref:
+                return ref
+    return None
 
 
 def _parse_reminder_reschedule(prompt: str) -> tuple[str, str] | None:
@@ -580,14 +588,22 @@ def _parse_reminder_reschedule(prompt: str) -> tuple[str, str] | None:
 
 
 def _find_reminder(reference: str) -> dict[str, Any]:
-    """Resolve a unique active reminder by a substring of its text."""
+    """Resolve a unique active reminder by a substring or normalized match of its text."""
     normalized = re.sub(r"\s+", " ", reference.strip().lower())
     if not normalized:
         raise ValueError("Tell me which reminder you mean.")
+    reminders = _app().memory_store.list_reminders()
     matches = [
-        reminder for reminder in _app().memory_store.list_reminders()
+        reminder for reminder in reminders
         if normalized in reminder["text"].strip().lower()
     ]
+    if not matches:
+        tech_norm = _app()._normalize_tech_text(normalized)
+        if tech_norm:
+            matches = [
+                reminder for reminder in reminders
+                if tech_norm in _app()._normalize_tech_text(reminder["text"])
+            ]
     if not matches:
         raise ValueError(f"No active reminder matched '{reference}'.")
     if len(matches) > 1:

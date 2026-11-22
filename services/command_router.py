@@ -27,7 +27,8 @@ _MEMORY_LIST_PATTERN = re.compile(
 )
 
 _MEMORY_DELETE_PATTERN = re.compile(
-    r"^(?:delete|remove|forget)\s+(?:(?:the|my)\s+)?(?:note|memory)\s+(?:#?)(.+)$",
+    r"^(?:delete|remove|forget)\s+(?:(?:the|my)\s+)?(?:note|memory)\s+(?:#?)(.+)$"
+    r"|^(?:delete|remove|forget)\s+(?:(?:the|my)\s+)?(.+?)\s+(?:(?:note|memory)|(?:in|from)\s+(?:(?:the|my)\s+)?(?:notes?|memor(?:y|ies)))$",
     re.IGNORECASE,
 )
 
@@ -50,7 +51,7 @@ def _memory_command(prompt: str) -> tuple[str, str] | None:
 
     delete_match = _MEMORY_DELETE_PATTERN.fullmatch(normalized)
     if delete_match:
-        ref = delete_match.group(1).strip(" \"'")
+        ref = (delete_match.group(1) or delete_match.group(2) or "").strip(" \"'")
         memories = _app().memory_store.list_memories()
         target_mem = None
         if ref.isdigit():
@@ -463,6 +464,102 @@ def _daily_briefing_command(prompt: str) -> tuple[str, str] | None:
     return ("\n".join(sections), "local-briefing")
 
 
+def _resolve_generic_delete(
+    target: str, chat_id: str, name: str = ""
+) -> tuple[str, str] | None:
+    """Resolve 'remove <name>' across recent chat context first, then across tasks/habits/reminders/topics."""
+    a = _app()
+    cleaned = a._strip_delete_filler(target)
+    if not cleaned:
+        return None
+    lowered = re.sub(r"\s+", " ", cleaned.lower())
+    tech_norm = a._normalize_tech_text(lowered)
+
+    def _matches_item(label: str) -> bool:
+        lab_low = re.sub(r"\s+", " ", str(label or "").strip().lower())
+        lab_tech = a._normalize_tech_text(lab_low)
+        if not lab_low:
+            return False
+        if lowered == lab_low or lowered in lab_low:
+            return True
+        if tech_norm and (tech_norm == lab_tech or tech_norm in lab_tech):
+            return True
+        req_words = set(tech_norm.split()) if tech_norm else set(re.findall(r"[a-z0-9]+", lowered))
+        cand_words = set(lab_tech.split()) if lab_tech else set(re.findall(r"[a-z0-9]+", lab_low))
+        return bool(req_words and req_words.issubset(cand_words))
+
+    # 1. Recent conversation context has highest priority so "remove the oops I just added"
+    #    right after listing tasks always picks the task instead of a learning topic.
+    ctx_tasks, ctx_habits = _extract_context_entities(chat_id)
+    if ctx_tasks:
+        ctx_t_matches = [t for t in ctx_tasks if _matches_item(t["title"])]
+        if len(ctx_t_matches) == 1:
+            chosen = ctx_t_matches[0]
+            a.memory_store.delete_task(chosen["id"])
+            remaining = len(a.memory_store.list_tasks(include_completed=False))
+            return (a.assistant_tone.task_deleted(chosen["title"], remaining), "local-task-manager")
+    if ctx_habits:
+        ctx_h_matches = [h for h in ctx_habits if _matches_item(h["name"])]
+        if len(ctx_h_matches) == 1:
+            chosen = ctx_h_matches[0]
+            a.memory_store.delete_habit(chosen["id"])
+            return (a.assistant_tone.habit_deleted(chosen["name"]), "local-habit-manager")
+    ctx_topics, _, is_recent_learning = a._extract_learning_context(chat_id)
+    if is_recent_learning and ctx_topics:
+        ctx_top_matches = [t for t in ctx_topics if _matches_item(t["name"])]
+        if len(ctx_top_matches) == 1:
+            chosen = ctx_top_matches[0]
+            a.learning_progress.delete_topic(chosen["id"])
+            return (f"Removed topic **{chosen['name']}**.", "local-learning")
+
+    # 2. Global resolution across tasks, habits, and active reminders
+    matched_task = None
+    try:
+        matched_task = a._find_task_reference(cleaned, include_completed=True)
+    except ValueError:
+        raise
+
+    matched_habit = None
+    try:
+        matched_habit = a._find_habit(cleaned)
+    except ValueError:
+        raise
+
+    matched_reminder = None
+    try:
+        matched_reminder = a._find_reminder(cleaned)
+    except ValueError:
+        matched_reminder = None
+
+    found_domains: list[tuple[str, Any]] = []
+    if matched_task is not None:
+        found_domains.append(("task", matched_task))
+    if matched_habit is not None:
+        found_domains.append(("habit", matched_habit))
+    if matched_reminder is not None:
+        found_domains.append(("reminder", matched_reminder))
+
+    if len(found_domains) > 1:
+        labels = " and a ".join(kind for kind, _ in found_domains[:2])
+        hints = " or ".join(f"'delete {kind} {cleaned}'" for kind, _ in found_domains[:2])
+        raise ValueError(f"I found both a {labels} matching '{cleaned}'. Say {hints}.")
+
+    if len(found_domains) == 1:
+        kind, item = found_domains[0]
+        if kind == "task":
+            a.memory_store.delete_task(item["id"])
+            remaining = len(a.memory_store.list_tasks(include_completed=False))
+            return (a.assistant_tone.task_deleted(item["title"], remaining), "local-task-manager")
+        if kind == "habit":
+            a.memory_store.delete_habit(item["id"])
+            return (a.assistant_tone.habit_deleted(item["name"]), "local-habit-manager")
+        if kind == "reminder":
+            a._cancel_reminder_unified(item["id"])
+            return (a.assistant_tone.reminder_cancelled(item["text"], name=name), "local-scheduler")
+
+    return None
+
+
 def _handle_local_command(prompt: str, chat_id: str) -> tuple[str, str] | None:
     """Answer tasks, habits, reminders, notes, greetings, and identity locally."""
     page = _app()._parse_navigation(prompt)
@@ -811,6 +908,12 @@ def _handle_local_command(prompt: str, chat_id: str) -> tuple[str, str] | None:
             return _app()._learning_complete_reply(
                 completion_target, name=name, chat_id=chat_id
             )
+
+    generic_delete = _app()._parse_generic_delete(prompt)
+    if generic_delete is not None:
+        resolved_del = _resolve_generic_delete(generic_delete, chat_id, name=name)
+        if resolved_del is not None:
+            return resolved_del
 
     web_query = _app()._parse_web_search_query(prompt)
     if web_query:

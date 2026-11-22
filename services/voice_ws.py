@@ -145,17 +145,20 @@ async def process_agent_turn(
         raise ValueError(f"Message is limited to {_app().MAX_PROMPT_CHARS} characters.")
     target_chat = chat_id or session_id or _app().DEFAULT_CHAT_ID
     _app()._ensure_chat_exists(target_chat)
-    _app().memory_store.add_message(target_chat, "user", user_message)
 
-    # 1. Pending confirmation check
+    from voice.text_clean import summarize_for_speech
+
+    # 1. Pending confirmation check (before adding user_message so context stays clean)
     handled, conf_reply, conf_actions = _app().confirmation_mgr.check_and_handle(target_chat, user_message, _app().agent_deps)
     if handled:
+        _app().memory_store.add_message(target_chat, "user", user_message)
         _app().memory_store.add_message(target_chat, "assistant", conf_reply)
         audio_url = await _app().generate_tts_url(conf_reply)
         _app()._cleanup_tts()
         return {
             "type": "agent_response",
             "text": conf_reply,
+            "spoken_text": summarize_for_speech(conf_reply),
             "audio_url": audio_url,
             "reminders": _app()._live_reminders(),
             "history": _app().memory_store.get_messages(target_chat)[-20:],
@@ -165,17 +168,27 @@ async def process_agent_turn(
     # 2. Rules-first command handling
     reply_text: str | None = None
     ui_actions: list[dict[str, Any]] = []
+    nav_page: str | None = None
+    local_error_msg: str | None = None
     try:
         cmd_result = await asyncio.to_thread(_app()._handle_local_command, user_message, target_chat)
         if cmd_result:
             reply_text = cmd_result[0]
-            _nav, ui_actions = _app()._build_local_command_ui_actions(cmd_result[1])
+            nav_page, ui_actions = _app()._build_local_command_ui_actions(cmd_result[1])
+    except ValueError as cmd_err:
+        logging.getLogger("orbit007").info("Local command raised ValueError (%s) for %r", cmd_err, user_message)
+        local_error_msg = str(cmd_err)
     except Exception:
         logging.getLogger("orbit007").exception("Local command handling failed for %r", user_message)
 
+    _app().memory_store.add_message(target_chat, "user", user_message)
+
     # 3. Route to native tool loop
     if reply_text is None:
-        history = _app().memory_store.get_messages(target_chat)[-10:]
+        raw_history = _app().memory_store.get_messages(target_chat)[-11:]
+        if raw_history and raw_history[-1].get("role") == "user" and raw_history[-1].get("content") == user_message:
+            raw_history = raw_history[:-1]
+        history = raw_history[-10:]
         memories = _app()._memories_for_prompt(user_message)
         try:
             if on_token is not None:
@@ -199,9 +212,12 @@ async def process_agent_turn(
                 )
             reply_text = agent_result.reply
             ui_actions = agent_result.ui_actions
+            nav_page = next((act.get("page") for act in ui_actions if act.get("type") == "navigate"), None)
         except Exception as exc:
             logging.getLogger("orbit007").warning("Agent turn failed: %s", exc)
-            if _app().is_gemini_active():
+            if local_error_msg:
+                reply_text = local_error_msg
+            elif _app().is_gemini_active():
                 reply_text = f"I'm having trouble reaching the Gemini API: {exc}"
             else:
                 reply_text = "I'm having trouble connecting to my local language model right now. Please make sure Ollama is running (`ollama serve`)."
@@ -216,8 +232,6 @@ async def process_agent_turn(
     audio_url = await _app().generate_tts_url(reply_text)
     _app()._cleanup_tts()
 
-    from voice.text_clean import summarize_for_speech
-
     return {
         "type": "agent_response",
         "text": reply_text,
@@ -225,6 +239,7 @@ async def process_agent_turn(
         "audio_url": audio_url,
         "reminders": _app()._live_reminders(),
         "history": _app().memory_store.get_messages(target_chat)[-20:],
+        "navigate": nav_page,
         "ui_actions": ui_actions,
     }
 

@@ -11,6 +11,26 @@ const normalizeRoadmap = (roadmap) => ({
     inProgressCount: roadmap.in_progress_count ?? 0,
     completionPercent: roadmap.completion_percent ?? 0,
     nextTopic: roadmap.next_topic ?? null,
+    folderLink: roadmap.folder_link
+        ? {
+            folderPath: roadmap.folder_link.folder_path,
+            enabled: Boolean(roadmap.folder_link.enabled),
+            lastSyncedAt: roadmap.folder_link.last_synced_at ?? null,
+            lastSyncSummary: roadmap.folder_link.last_sync_summary ?? {},
+        }
+        : null,
+});
+
+const normalizeCodeSuggestion = (item) => ({
+    ...item,
+    roadmapId: item.roadmap_id,
+    topicId: item.topic_id,
+    topicName: item.topic_name ?? '',
+    topicStatus: item.topic_status ?? '',
+    roadmapName: item.roadmap_name ?? '',
+    suggestionState: item.suggestion_state ?? 'pending',
+    evidenceFiles: item.evidence_files ?? [],
+    updatedAt: item.updated_at ?? null,
 });
 
 const normalizeTopic = (topic) => ({
@@ -450,6 +470,11 @@ export const learningService = {
         return (await apiRequest('/api/learning/links?state=suggested')).links.map(normalizeLink);
     },
 
+    scanSuggestedLinks: async () => {
+        if (MOCK_ENABLED) return (await mockListSuggestedLinks()).links.map(normalizeLink);
+        return (await apiRequest('/api/learning/links/scan', { method: 'POST' })).links.map(normalizeLink);
+    },
+
     updateLink: async (id, patch) => {
         if (MOCK_ENABLED) {
             const link = await mockUpdateLink(id, patch);
@@ -479,5 +504,89 @@ export const learningService = {
             method: 'PATCH',
             body: JSON.stringify(patch),
         });
+    },
+
+    listFolders: async () => {
+        if (MOCK_ENABLED) return [];
+        return (await apiRequest('/api/learning/folders')).folders ?? [];
+    },
+
+    pickFolder: async (initialDir = null) => {
+        if (MOCK_ENABLED) return { cancelled: true, folder_path: null };
+        return apiRequest('/api/learning/folders/pick', {
+            method: 'POST',
+            body: JSON.stringify(initialDir ? { initial_dir: initialDir } : {}),
+        });
+    },
+
+    openFolderInExplorer: async (roadmapId) => {
+        if (MOCK_ENABLED) return { status: 'opened' };
+        return apiRequest(`/api/learning/roadmaps/${roadmapId}/folder/open`, {
+            method: 'POST',
+        });
+    },
+
+    linkFolder: async (roadmapId, folderPath, enabled = true) => {
+        if (MOCK_ENABLED) return { folder: { folder_path: folderPath, enabled }, sync: null };
+        return apiRequest(`/api/learning/roadmaps/${roadmapId}/folder`, {
+            method: 'PUT',
+            body: JSON.stringify({ folder_path: folderPath, enabled }),
+        });
+    },
+
+    unlinkFolder: async (roadmapId) => {
+        if (MOCK_ENABLED) return { status: 'unlinked' };
+        return apiRequest(`/api/learning/roadmaps/${roadmapId}/folder`, {
+            method: 'DELETE',
+        });
+    },
+
+    syncFolder: async (roadmapId) => {
+        if (MOCK_ENABLED) return { practiced_files: 0, empty_files: 0, friendly_summary: '' };
+        return apiRequest(`/api/learning/roadmaps/${roadmapId}/sync`, {
+            method: 'POST',
+        });
+    },
+
+    syncAllFolders: async () => {
+        if (MOCK_ENABLED) return { results: [], suggestions: [] };
+        const res = await apiRequest('/api/learning/folders/sync-all', { method: 'POST' });
+        return {
+            results: res.results ?? [],
+            suggestions: (res.suggestions ?? []).map(normalizeCodeSuggestion),
+        };
+    },
+
+    getCodeInsights: async (roadmapId) => {
+        if (MOCK_ENABLED) return null;
+        return apiRequest(`/api/learning/roadmaps/${roadmapId}/code-insights`);
+    },
+
+    listCodeSuggestions: async (roadmapId = null) => {
+        if (MOCK_ENABLED) return [];
+        const qs = roadmapId ? `?roadmap_id=${roadmapId}&state=pending` : '?state=pending';
+        const res = await apiRequest(`/api/learning/code-suggestions${qs}`);
+        return (res.suggestions ?? []).map(normalizeCodeSuggestion);
+    },
+
+    updateCodeSuggestion: async (suggestionId, state) => {
+        if (MOCK_ENABLED) return { id: suggestionId, suggestion_state: state };
+        return normalizeCodeSuggestion(
+            await apiRequest(`/api/learning/code-suggestions/${suggestionId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ state }),
+            })
+        );
+    },
+
+    searchCodeRag: async (query, roadmapId = null, limit = 5) => {
+        if (MOCK_ENABLED) return [];
+        const payload = { query, limit };
+        if (roadmapId != null) payload.roadmap_id = roadmapId;
+        const res = await apiRequest('/api/learning/rag/search', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+        });
+        return res.results ?? [];
     },
 };

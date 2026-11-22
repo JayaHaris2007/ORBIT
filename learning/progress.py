@@ -253,7 +253,13 @@ def find_roadmap(reference: str) -> dict[str, Any] | None:
 
 
 def _normalize_reference(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower().replace("&", " and "))
+    lowered = value.lower().replace("&", " and ")
+    lowered = re.sub(r"\bc\s*\+\s*\+", "cpp", lowered)
+    lowered = re.sub(r"\bc\s+plus\s+plus\b", "cpp", lowered)
+    lowered = re.sub(r"\bc\s*#", "csharp", lowered)
+    lowered = re.sub(r"\bc\s+sharp\b", "csharp", lowered)
+    lowered = re.sub(r"\boops\b", "oop", lowered)
+    normalized = re.sub(r"[^a-z0-9]+", " ", lowered)
     return re.sub(r"\s+", " ", normalized).strip()
 
 
@@ -303,6 +309,23 @@ def roadmap_summaries() -> list[dict[str, Any]]:
             total = counts["total"] or 0
             done = counts["done"] or 0
             next_hint = next_topic_for_roadmap(connection, roadmap["id"])
+            folder_row = connection.execute(
+                "SELECT folder_path, enabled, last_synced_at, last_sync_summary "
+                "FROM learning_folders WHERE roadmap_id = ?",
+                (roadmap["id"],),
+            ).fetchone()
+            folder_info = None
+            if folder_row is not None:
+                try:
+                    sync_sum = json.loads(folder_row["last_sync_summary"] or "{}")
+                except Exception:
+                    sync_sum = {}
+                folder_info = {
+                    "folder_path": folder_row["folder_path"],
+                    "enabled": bool(folder_row["enabled"]),
+                    "last_synced_at": folder_row["last_synced_at"],
+                    "last_sync_summary": sync_sum,
+                }
             summaries.append(
                 {
                     "id": roadmap["id"],
@@ -315,6 +338,7 @@ def roadmap_summaries() -> list[dict[str, Any]]:
                     "in_progress_count": counts["active"] or 0,
                     "completion_percent": round(done * 100 / total) if (total and total > 0) else 0,
                     "next_topic": next_hint,
+                    "folder_link": folder_info,
                 }
             )
     return summaries

@@ -153,7 +153,8 @@ const AssistantSidebar = () => {
                 },
             ]);
         }
-        if (data?.navigate) goToPage(data.navigate);
+        const hasNavAction = Array.isArray(data?.ui_actions) && data.ui_actions.some((a) => a?.type === 'navigate');
+        if (data?.navigate && !hasNavAction) goToPage(data.navigate);
         if (data?.ui_actions) applyUiActions(data.ui_actions, `${replyText || ''} ${data?.response || ''}`);
         refreshChats();
         refresh();
@@ -205,11 +206,27 @@ const AssistantSidebar = () => {
                 apiRequest(`/api/notifications/${id}?after_id=0`)
             ]);
             if (requestSeq.current !== seq) return;
-            setMessages(history.messages || []);
+            const histMessages = history.messages || [];
             const notifications = notificationData.notifications || [];
             lastNotificationId.current = notifications.length
                 ? notifications[notifications.length - 1].id
                 : 0;
+            // Merge persisted notifications (proactive check-ins, reminders, nudges) chronologically with chat history
+            const merged = [
+                ...histMessages,
+                ...notifications.map((item) => ({
+                    id: `notif-${item.id}`,
+                    role: 'assistant',
+                    content: item.content,
+                    created_at: item.created_at,
+                    notification: true,
+                })),
+            ].sort((a, b) => {
+                const ta = a.created_at ? Date.parse(a.created_at) : 0;
+                const tb = b.created_at ? Date.parse(b.created_at) : 0;
+                return ta - tb;
+            });
+            setMessages(merged);
         } catch (requestError) {
             if (requestSeq.current === seq) setError(requestError.message);
         }
@@ -258,6 +275,52 @@ const AssistantSidebar = () => {
         document.documentElement.classList.toggle('spidey-minimized', minimized);
         localStorage.setItem(MINIMIZED_KEY, minimized ? '1' : '0');
     }, [minimized]);
+
+    // Resizable Agent sidebar width (drag left border on desktop xl+ screens)
+    const AGENT_WIDTH_KEY = 'spidey_agent_width';
+    const DEFAULT_AGENT_WIDTH = 390;
+    const [agentWidth, setAgentWidth] = useState(() => {
+        try {
+            const saved = parseInt(localStorage.getItem(AGENT_WIDTH_KEY) || '', 10);
+            if (Number.isFinite(saved) && saved >= 300 && saved <= 760) return saved;
+        } catch { /* ignore */ }
+        return DEFAULT_AGENT_WIDTH;
+    });
+    const [isResizing, setIsResizing] = useState(false);
+
+    useEffect(() => {
+        document.documentElement.style.setProperty('--spidey-agent-width', `${agentWidth}px`);
+        try {
+            localStorage.setItem(AGENT_WIDTH_KEY, String(agentWidth));
+        } catch { /* ignore */ }
+    }, [agentWidth]);
+
+    const startResizingAgent = (event) => {
+        event.preventDefault();
+        setIsResizing(true);
+        document.documentElement.classList.add('spidey-resizing');
+
+        const handlePointerMove = (moveEvent) => {
+            const clientX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+            const maxAllowed = Math.min(760, Math.floor(window.innerWidth * 0.62));
+            const nextWidth = Math.max(300, Math.min(maxAllowed, window.innerWidth - clientX));
+            setAgentWidth(nextWidth);
+        };
+
+        const stopResizing = () => {
+            setIsResizing(false);
+            document.documentElement.classList.remove('spidey-resizing');
+            window.removeEventListener('mousemove', handlePointerMove);
+            window.removeEventListener('mouseup', stopResizing);
+            window.removeEventListener('touchmove', handlePointerMove);
+            window.removeEventListener('touchend', stopResizing);
+        };
+
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', stopResizing);
+        window.addEventListener('touchmove', handlePointerMove);
+        window.addEventListener('touchend', stopResizing);
+    };
 
     useEffect(() => {
         if (!chatId) return undefined;
@@ -422,8 +485,18 @@ const AssistantSidebar = () => {
             // Ignore a late reply if another conversation was opened meanwhile.
             if (activeChatRef.current !== chatId || !finalData) return;
             const data = finalData;
-            setMessages(data.messages || []);
-            if (data.navigate) goToPage(data.navigate);
+            setMessages((current) => {
+                const existingNotifs = current.filter((m) => m.notification);
+                if (!existingNotifs.length) return data.messages || [];
+                const merged = [...(data.messages || []), ...existingNotifs];
+                return merged.sort((a, b) => {
+                    const ta = a.created_at ? Date.parse(a.created_at) : 0;
+                    const tb = b.created_at ? Date.parse(b.created_at) : 0;
+                    return ta - tb;
+                });
+            });
+            const hasNavAction = Array.isArray(data.ui_actions) && data.ui_actions.some((a) => a?.type === 'navigate');
+            if (data.navigate && !hasNavAction) goToPage(data.navigate);
             applyUiActions(data.ui_actions, `${value} ${data.response || ''}`);
             if ((data.spoken_response || data.response) && voice.speakEnabled && voiceSession.state === 'idle') {
                 voice.speak(data.spoken_response || data.response);
@@ -526,6 +599,25 @@ const AssistantSidebar = () => {
             {open && <button type="button" className="workspace-backdrop fixed inset-0 z-40 bg-black/70 xl:hidden" aria-label="Close S.P.I.D.E.Y panel" onClick={() => setOpen(false)} />}
 
             <aside className={`workspace-sidebar fixed right-0 top-0 z-50 flex h-[calc(100dvh-4rem)] w-full max-w-[390px] flex-col overflow-hidden border-l border-[#F2EFE9]/15 bg-[#111111] transition-transform duration-200 md:h-screen ${open ? 'workspace-sidebar-open' : ''}`}>
+                {/* Drag-to-resize handle on the left edge (desktop xl+) */}
+                <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize S.P.I.D.E.Y panel"
+                    title="Drag to resize · Double-click to reset"
+                    onMouseDown={startResizingAgent}
+                    onTouchStart={startResizingAgent}
+                    onDoubleClick={() => setAgentWidth(DEFAULT_AGENT_WIDTH)}
+                    className={`hidden xl:flex absolute left-0 top-0 bottom-0 z-50 w-2 -translate-x-1/2 cursor-col-resize items-center justify-center group ${
+                        isResizing ? 'bg-[#D95D24]/30' : 'hover:bg-[#D95D24]/25'
+                    }`}
+                >
+                    <span
+                        className={`h-12 w-[3px] rounded-full transition-colors ${
+                            isResizing ? 'bg-[#D95D24]' : 'bg-[#F2EFE9]/20 group-hover:bg-[#D95D24]'
+                        }`}
+                    />
+                </div>
                 <header className="flex shrink-0 items-center gap-2.5 border-b border-[#F2EFE9]/15 bg-[#141414] px-4 py-3.5">
                     <div className="grid h-9 w-9 shrink-0 place-items-center border border-[#F2EFE9]/20 bg-[#111111]">
                         <SpiderMark size={28} state={brain?.brainState || 'idle'} animateEntrance={false} />

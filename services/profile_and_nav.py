@@ -245,11 +245,16 @@ def _user_fact_memories() -> list[dict[str, Any]]:
     return facts
 
 
+_ASSISTANT_NAMES = {"spidey", "s.p.i.d.e.y", "s.p.i.d.e.y.", "jarvis", "orbit", "orbit007", "assistant"}
+
+
 def _user_name(facts: list[dict[str, Any]]) -> str:
     for memory in facts:
         match = _NAME_IN_MEMORY_PATTERN.search(memory["content"])
         if match:
-            return match.group(1).strip(" .,!-")
+            candidate = match.group(1).strip(" .,!-")
+            if candidate and candidate.lower() not in _ASSISTANT_NAMES:
+                return candidate
     return ""
 
 

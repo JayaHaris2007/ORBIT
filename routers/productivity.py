@@ -162,6 +162,8 @@ def update_task(task_id: int, payload: dict[str, Any] = Body(...)):
             a._task_completion_line(task, name=a._user_name(a._user_fact_memories())),
         )
         a._run_learning_hook(lambda: a._learning_on_task_completed(task_id))
+    elif payload.get("title") and not task.get("completed"):
+        a._run_learning_hook(lambda: a._learning_suggest_for_task(task_id))
     return task
 
 

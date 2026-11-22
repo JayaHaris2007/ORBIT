@@ -57,6 +57,27 @@ class ToolDefinition:
 
 # --- Entity Resolution Helper ---
 
+_TECH_TEXT_REPLACEMENTS = (
+    (re.compile(r"\bc\s*\+\s*\+", re.IGNORECASE), "cpp"),
+    (re.compile(r"\bc\s+plus\s+plus\b", re.IGNORECASE), "cpp"),
+    (re.compile(r"\bc\s*#", re.IGNORECASE), "csharp"),
+    (re.compile(r"\bc\s+sharp\b", re.IGNORECASE), "csharp"),
+    (re.compile(r"\bnode\.?js\b", re.IGNORECASE), "nodejs"),
+    (re.compile(r"\bnext\.?js\b", re.IGNORECASE), "nextjs"),
+    (re.compile(r"\breact\.?js\b", re.IGNORECASE), "reactjs"),
+    (re.compile(r"\boops\b", re.IGNORECASE), "oop"),
+)
+
+
+def _normalize_tech_text(value: str) -> str:
+    """Normalize programming-language symbols and common spoken aliases for fuzzy matching."""
+    text = str(value or "").strip().lower()
+    for pattern, repl in _TECH_TEXT_REPLACEMENTS:
+        text = pattern.sub(repl, text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def resolve_entity(
     query: str | int,
     candidates: list[dict[str, Any]],
@@ -83,6 +104,7 @@ def resolve_entity(
 
     # 2. String query check against title / name / text / content
     query_str = str(query).strip().lower()
+    query_norm = _normalize_tech_text(query_str)
     if not query_str:
         return None, {"status": "not_found", "message": f"Empty reference for {entity_name}."}
 
@@ -98,10 +120,18 @@ def resolve_entity(
         ).strip()
         if not candidate_text:
             continue
-        # Check exact case-insensitive match
-        if candidate_text.lower() == query_str:
+        cand_lower = candidate_text.lower()
+        cand_norm = _normalize_tech_text(cand_lower)
+        # Check exact case-insensitive or tech-normalized match
+        if cand_lower == query_str or (query_norm and cand_norm == query_norm):
             return item, None
-        score = float(rapidfuzz.fuzz.token_set_ratio(query_str, candidate_text.lower()))
+        raw_score = float(rapidfuzz.fuzz.token_set_ratio(query_str, cand_lower))
+        norm_score = (
+            float(rapidfuzz.fuzz.token_set_ratio(query_norm, cand_norm))
+            if (query_norm and cand_norm)
+            else 0.0
+        )
+        score = max(raw_score, norm_score)
         scored.append((score, item))
 
     if not scored:
@@ -242,6 +272,23 @@ def _exec_delete_reminder(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 
 
 # 2. Tasks
+def _parse_due_value(raw_due: Any, ctx: ToolContext) -> str | None:
+    if not raw_due:
+        return None
+    raw_str = str(raw_due).strip()
+    if not raw_str:
+        return None
+    try:
+        from services.productivity_parsers import _parse_task_due_date
+        parsed_iso = _parse_task_due_date(raw_str)
+        if parsed_iso:
+            return parsed_iso
+    except Exception:
+        pass
+    parsed = ctx.deps.parse_reminder_time(raw_str)
+    return parsed.isoformat() if parsed else None
+
+
 def _exec_create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     title = str(args.get("title", "")).strip()
     if not title:
@@ -251,11 +298,15 @@ def _exec_create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         priority = "medium"
 
     due = args.get("due")
-    due_iso = None
-    if due:
-        parsed = ctx.deps.parse_reminder_time(str(due))
-        if parsed:
-            due_iso = parsed.isoformat()
+    due_iso = _parse_due_value(due, ctx)
+    if due_iso is None:
+        try:
+            from services.productivity_parsers import _extract_task_due_date
+            extracted_title, extracted_due = _extract_task_due_date(title)
+            if extracted_due and extracted_title:
+                title, due_iso = extracted_title, extracted_due
+        except Exception:
+            pass
 
     task = ctx.deps.memory_store.create_task(title, priority=priority, due_at=due_iso)
     ctx.deps.run_learning_hook(lambda: ctx.deps.suggest_learning_for_task(task["id"]))
@@ -307,9 +358,11 @@ def _exec_update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     title = args.get("title")
     priority = args.get("priority")
     completed = args.get("completed")
+    due = args.get("due")
+    due_iso = _parse_due_value(due, ctx) if due else None
 
     if str(task_ref).strip().lower() in ("all", "all tasks", "all my tasks", "everything", "*") and (
-        completed is not None or priority is not None
+        completed is not None or priority is not None or due_iso is not None
     ):
         if not tasks:
             return {"status": "ok", "message": "No tasks set up yet.", "tasks": [], "count": 0}
@@ -318,12 +371,14 @@ def _exec_update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             u = ctx.deps.memory_store.update_task(
                 task_id=t["id"],
                 priority=str(priority).lower() if priority else None,
+                due_at=due_iso,
                 completed=bool(completed) if completed is not None else None,
             )
             updated_list.append({
                 "id": u["id"],
                 "title": u["title"],
                 "priority": u["priority"],
+                "due_at": u.get("due_at"),
                 "completed": bool(u.get("completed")),
             })
         ctx.ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
@@ -333,12 +388,20 @@ def _exec_update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if err:
         return err
 
+    was_completed = bool(item.get("completed"))
     updated = ctx.deps.memory_store.update_task(
         task_id=item["id"],
         title=str(title).strip() if title else None,
         priority=str(priority).lower() if priority else None,
+        due_at=due_iso,
         completed=bool(completed) if completed is not None else None,
     )
+    if completed and not was_completed:
+        try:
+            import app as _app_mod
+            ctx.deps.run_learning_hook(lambda: _app_mod._learning_on_task_completed(item["id"]))
+        except Exception:
+            pass
 
     ctx.ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
     return {
@@ -347,6 +410,7 @@ def _exec_update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "id": updated["id"],
             "title": updated["title"],
             "priority": updated["priority"],
+            "due_at": updated.get("due_at"),
             "completed": bool(updated.get("completed")),
         },
     }
@@ -360,6 +424,14 @@ def _exec_delete_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     tasks = ctx.deps.memory_store.list_tasks(include_completed=True)
     item, err = resolve_entity(task_ref, tasks, title_key="title", entity_name="task")
     if err:
+        if err.get("status") == "not_found":
+            habits = ctx.deps.memory_store.list_habits()
+            h_item, _ = resolve_entity(task_ref, habits, title_key="name", entity_name="habit")
+            if h_item:
+                err = {
+                    **err,
+                    "message": f"{err['message']} Note: a habit named '{h_item['name']}' exists — use delete_habit if the user meant that habit.",
+                }
         return err
 
     summary = f"Delete the task '{item['title']}'?"
@@ -832,6 +904,17 @@ def _exec_complete_learning_topic(args: dict[str, Any], ctx: ToolContext) -> dic
 
     item, err = resolve_entity(topic_ref, rows, title_key="name", entity_name="topic")
     if err:
+        if err.get("status") == "not_found":
+            tasks = ctx.deps.memory_store.list_tasks(include_completed=True)
+            t_item, _ = resolve_entity(topic_ref, tasks, title_key="title", entity_name="task")
+            if t_item:
+                err = {
+                    **err,
+                    "message": (
+                        f"{err['message']} However, a TASK exists matching this: "
+                        f"#{t_item['id']} '{t_item['title']}' — call update_task with completed=true if the user meant that task."
+                    ),
+                }
         return err
 
     if item.get("status") == "completed":
@@ -912,6 +995,17 @@ def _exec_delete_learning_topic(args: dict[str, Any], ctx: ToolContext) -> dict[
 
     item, err = resolve_entity(topic_ref, rows, title_key="name", entity_name="topic")
     if err:
+        if err.get("status") == "not_found":
+            tasks = ctx.deps.memory_store.list_tasks(include_completed=True)
+            t_item, _ = resolve_entity(topic_ref, tasks, title_key="title", entity_name="task")
+            if t_item:
+                err = {
+                    **err,
+                    "message": (
+                        f"{err['message']} However, a TASK exists matching this: "
+                        f"#{t_item['id']} '{t_item['title']}' — call delete_task instead if the user meant that task."
+                    ),
+                }
         return err
 
     summary = f"Delete the learning topic '{item['name']}'?"
@@ -921,6 +1015,140 @@ def _exec_delete_learning_topic(args: dict[str, Any], ctx: ToolContext) -> dict[
         target=item,
         summary=summary,
     )
+
+
+def _exec_link_learning_folder(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    folder_path = str(args.get("folder_path", "")).strip()
+    roadmap_ref = str(args.get("roadmap", "")).strip()
+    if not folder_path or not roadmap_ref:
+        return {"status": "error", "message": "'folder_path' and 'roadmap' are required."}
+    if not ctx.deps.learning_schema_initialized():
+        return {"status": "error", "message": "Learning schema is not initialized."}
+
+    from learning import code_rag, progress
+    summaries = progress.roadmap_summaries()
+    rm = progress.find_roadmap(roadmap_ref)
+    if rm is None:
+        rm, err = resolve_entity(roadmap_ref, summaries, title_key="name", entity_name="roadmap")
+        if err:
+            return err
+
+    try:
+        res = code_rag.link_folder_to_roadmap(
+            int(rm["id"]),
+            folder_path,
+            sync_now=True,
+            embed=getattr(ctx.deps.memory_store, "embed", None),
+        )
+        ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+        sync_info = res.get("sync") or {}
+        return {
+            "status": "ok",
+            "roadmap_name": rm["name"],
+            "folder_path": (res.get("folder") or {}).get("folder_path", folder_path),
+            "total_files": sync_info.get("total_files", 0),
+            "practiced_files": sync_info.get("practiced_files", 0),
+            "empty_files": sync_info.get("empty_files", 0),
+            "pending_suggestions": sync_info.get("pending_suggestions", 0),
+            "friendly_summary": sync_info.get("friendly_summary", ""),
+        }
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+
+def _exec_sync_learning_folder(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    if not ctx.deps.learning_schema_initialized():
+        return {"status": "error", "message": "Learning schema is not initialized."}
+
+    from learning import code_rag, progress
+    roadmap_ref = str(args.get("roadmap") or "").strip()
+    embed = getattr(ctx.deps.memory_store, "embed", None)
+
+    if roadmap_ref:
+        rm = progress.find_roadmap(roadmap_ref)
+        if rm is None:
+            rm, err = resolve_entity(
+                roadmap_ref, progress.roadmap_summaries(), title_key="name", entity_name="roadmap"
+            )
+            if err:
+                return err
+        try:
+            res = code_rag.sync_roadmap_folder(int(rm["id"]), embed=embed)
+            insights = code_rag.get_roadmap_code_insights(int(rm["id"]))
+            ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+            return {
+                "status": "ok",
+                "roadmap_name": res["roadmap_name"],
+                "practiced_files": res["practiced_files"],
+                "empty_files": insights["empty_files"],
+                "pending_suggestions": [
+                    {"id": s["id"], "topic": s["topic_name"], "reason": s["reason"]}
+                    for s in insights["pending_suggestions"]
+                ],
+                "next_topics": [t["name"] for t in insights["next_topics"]],
+                "friendly_summary": res["friendly_summary"],
+            }
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    results = code_rag.sync_all_linked_folders(embed=embed)
+    if not results:
+        return {
+            "status": "ok",
+            "message": "No learning folders are linked yet. Tell me a folder path and roadmap to link.",
+        }
+    ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+    return {
+        "status": "ok",
+        "synced": [
+            {
+                "roadmap_name": r.get("roadmap_name"),
+                "practiced_files": r.get("practiced_files", 0),
+                "empty_files": r.get("empty_files", 0),
+                "pending_suggestions": r.get("pending_suggestions", 0),
+                "friendly_summary": r.get("friendly_summary", ""),
+                "error": r.get("error"),
+            }
+            for r in results
+        ],
+    }
+
+
+def _exec_search_learning_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    query = str(args.get("query", "")).strip()
+    if not query:
+        return {"status": "error", "message": "'query' is required."}
+    if not ctx.deps.learning_schema_initialized():
+        return {"status": "error", "message": "Learning schema is not initialized."}
+
+    from learning import code_rag, progress
+    roadmap_id = None
+    roadmap_ref = str(args.get("roadmap") or "").strip()
+    if roadmap_ref:
+        rm = progress.find_roadmap(roadmap_ref)
+        if rm:
+            roadmap_id = int(rm["id"])
+
+    hits = code_rag.search_code_rag(
+        query,
+        roadmap_id=roadmap_id,
+        limit=4,
+        embed=getattr(ctx.deps.memory_store, "embed", None),
+    )
+    return {
+        "status": "ok",
+        "query": query,
+        "results": [
+            {
+                "file": h["rel_path"],
+                "lines": f"L{h['start_line']}-L{h['end_line']}",
+                "state": h["file_state"],
+                "roadmap": h["roadmap_name"],
+                "snippet": h["snippet"][:450],
+            }
+            for h in hits
+        ],
+    }
 
 
 def _exec_get_analytics(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -1142,13 +1370,14 @@ TOOLS: list[ToolDefinition] = [
     ),
     ToolDefinition(
         name="update_task",
-        description="Update a task's title, priority, or completion status (pass task='all' to update all tasks).",
+        description="Update a task's title, priority, due date, or completion status (pass task='all' to update all tasks).",
         parameters={
             "type": "object",
             "properties": {
                 "task": {"type": "string", "description": "Task ID, title, or 'all' for all tasks."},
                 "title": {"type": "string", "description": "New task title."},
                 "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "New priority."},
+                "due": {"type": "string", "description": "New due date/time (e.g. '20-11-2026', 'tomorrow')."},
                 "completed": {"type": "boolean", "description": "Set task completed status (true for completed, false to reopen/unmark)."},
             },
             "required": ["task"],
@@ -1368,6 +1597,46 @@ TOOLS: list[ToolDefinition] = [
         },
         destructive=True,
         executor=_exec_delete_learning_topic,
+    ),
+    ToolDefinition(
+        name="link_learning_folder",
+        description="Link a local code folder to a learning roadmap and analyze/index its code files.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "folder_path": {"type": "string", "description": "Absolute path to local learning folder."},
+                "roadmap": {"type": "string", "description": "Target roadmap name or ID."},
+            },
+            "required": ["folder_path", "roadmap"],
+        },
+        destructive=False,
+        executor=_exec_link_learning_folder,
+    ),
+    ToolDefinition(
+        name="sync_learning_folder",
+        description="Analyze linked learning code folder(s) to track progress, unfinished files, and what to learn next.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "roadmap": {"type": "string", "description": "Optional roadmap name or ID to sync."},
+            },
+        },
+        destructive=False,
+        executor=_exec_sync_learning_folder,
+    ),
+    ToolDefinition(
+        name="search_learning_code",
+        description="Search the user's indexed practice code files (RAG) by concept, filename, or code snippet.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Concept, topic, or code question to search."},
+                "roadmap": {"type": "string", "description": "Optional roadmap name to scope search."},
+            },
+            "required": ["query"],
+        },
+        destructive=False,
+        executor=_exec_search_learning_code,
     ),
     # Analytics & Batch Operations
     ToolDefinition(

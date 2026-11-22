@@ -113,6 +113,7 @@ from agent.gemini import (  # noqa: E402, F401
 )
 from agent.loop import AgentResult, run_agent_loop, run_agent_loop_stream  # noqa: E402, F401
 from learning import classifier as learning_classifier  # noqa: E402, F401
+from learning import code_rag as learning_code_rag  # noqa: E402, F401
 from learning import nudges as learning_nudges  # noqa: E402, F401
 from learning import progress as learning_progress  # noqa: E402
 from learning import roadmaps as learning_roadmaps  # noqa: E402, F401
@@ -225,9 +226,12 @@ from services.productivity_parsers import (  # noqa: E402, F401
     _is_habit_list_request,
     _is_task_list_request,
     _normalize_command,
+    _normalize_tech_text,
     _parse_chat_habit,
     _parse_completion_target,
+    _parse_generic_delete,
     _parse_habit_completion,
+    _strip_delete_filler,
     _parse_habit_delete,
     _parse_habit_rename,
     _parse_habit_uncomplete,

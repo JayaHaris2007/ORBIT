@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from learning import progress as learning_progress, schema as learning_schema
+from learning import code_rag as learning_code_rag, progress as learning_progress, schema as learning_schema
 
 
 def _app():
@@ -139,7 +139,8 @@ _LEARNING_BULK_TOPICS_ADD_PATTERN = re.compile(
 )
 
 _LEARNING_ROADMAP_DELETE_PATTERN = re.compile(
-    r"^(?:delete|remove|drop)\s+(?:the\s+|my\s+)?(?:learning\s+)?roadmap\s+(?:called\s+|named\s+)?(.+)$",
+    r"^(?:delete|remove|drop)\s+(?:the\s+|my\s+)?(?:learning\s+)?roadmap\s+(?:called\s+|named\s+)?(.+)$"
+    r"|^(?:delete|remove|drop)\s+(?:the\s+|my\s+)?(.+?)\s+(?:learning\s+)?roadmap$",
     re.IGNORECASE,
 )
 
@@ -151,7 +152,8 @@ _LEARNING_TOPIC_CREATE_PATTERN = re.compile(
 )
 
 _LEARNING_TOPIC_DELETE_PATTERN = re.compile(
-    r"^(?:delete|remove|drop)\s+(?:the\s+|my\s+)?(?:learning\s+)?topic\s+(?:called\s+|named\s+)?(.+)$",
+    r"^(?:delete|remove|drop)\s+(?:the\s+|my\s+)?(?:learning\s+)?topic\s+(?:called\s+|named\s+)?(.+)$"
+    r"|^(?:delete|remove|drop)\s+(?:the\s+|my\s+)?(.+?)\s+(?:(?:learning\s+)?topic|(?:in|from)\s+(?:the\s+|my\s+)?(?:learning|roadmap|topics?))$",
     re.IGNORECASE,
 )
 
@@ -194,6 +196,28 @@ _LEARNING_BARE_PATTERN = re.compile(
     r"^(?:(?:show|check|view|list|what(?:'s| is| are))\s+(?:me\s+)?)?"
     r"(?:(?:my|the|all|current)\s+)*"
     r"(?:learning|learning\s+roadmaps?|roadmaps?|learning\s+tracker|study\s+plan|learning\s+goals?)$",
+    re.IGNORECASE,
+)
+
+_LEARNING_LINK_FOLDER_RAW_PATTERN = re.compile(
+    r"^(?:link|connect|attach|track|watch|bind)\s+(?:(?:my|the)\s+)?(?:learning\s+|code\s+|coding\s+)?folder\s+"
+    r"(?P<path>(?:[A-Za-z]:\\[^\n]+?|/[^\n]+?|\"[^\"]+\"|'[^']+'))\s+"
+    r"(?:to|for|with|on)\s+(?:(?:my|the)\s+)?(?P<roadmap>.+?)(?:\s+roadmap)?[.!?]*$",
+    re.IGNORECASE,
+)
+
+_LEARNING_SYNC_FOLDER_PATTERN = re.compile(
+    r"^(?:sync|scan|analyze|analyse|check|refresh|track|inspect)\s+"
+    r"(?:(?:my|the|all)\s+)?(?:(?P<roadmap>.+?)\s+)?(?:learning|coding|code|practice)\s+folders?$"
+    r"|^(?:sync|scan|analyze|analyse|check)\s+(?:my|the)\s+folder\s+(?:for|of)\s+(?P<roadmap2>.+)$"
+    r"|^what\s+have\s+i\s+coded(?:\s+(?:so\s+far|in\s+(?P<roadmap3>.+)))?$",
+    re.IGNORECASE,
+)
+
+_LEARNING_CODE_SUGGESTION_ACTION_PATTERN = re.compile(
+    r"^(?P<action>confirm|accept|approve|dismiss|reject|ignore)\s+"
+    r"(?:(?P<all>all)\s+)?(?:(?:the|my|pending)\s+)?code\s+(?:completion\s+)?suggestions?"
+    r"(?:\s+(?:for\s+|#)(?P<target>.+))?$",
     re.IGNORECASE,
 )
 
@@ -626,6 +650,15 @@ def _try_bulk_learning_import(prompt: str, chat_id: str = "") -> tuple[str, str]
     if len(raw_lines) < 3:
         return None
 
+    # Never hijack completion/deletion/update requests (e.g. pasting UI rows + "mark all this completed")
+    if re.search(
+        r"\b(?:mark\s+(?:all|these|this|them)\b.*(?:completed|complete|done|finished|started|in\s+progress)|"
+        r"(?:delete|remove|complete|finish)\s+(?:all|these|them))\b",
+        raw,
+        re.IGNORECASE,
+    ):
+        return None
+
     first_line = raw_lines[0]
     has_learning_cue = bool(
         re.search(
@@ -683,7 +716,88 @@ def _learning_command(
     if bulk_imported is not None:
         return bulk_imported
 
+    # 1b. Link local learning folder (parse raw prompt before punctuation normalization)
+    raw_stripped = (prompt or "").strip()
+    link_folder_match = _LEARNING_LINK_FOLDER_RAW_PATTERN.fullmatch(raw_stripped)
+    if link_folder_match:
+        raw_path = link_folder_match.group("path").strip().strip("\"'")
+        rm_ref = link_folder_match.group("roadmap").strip().strip("\"'?!.")
+        roadmap = _resolve_roadmap_from_context_or_ref(rm_ref, chat_id)
+        if roadmap is None:
+            return _learning_unknown_roadmap_reply(rm_ref)
+        try:
+            embed = getattr(_app().memory_store, "embed", None)
+            res = learning_code_rag.link_folder_to_roadmap(
+                int(roadmap["id"]), raw_path, sync_now=True, embed=embed
+            )
+            sync_info = res.get("sync") or {}
+            return (
+                f"Linked `{res['folder']['folder_path']}` to **{roadmap['name']}**!\n\n"
+                + (sync_info.get("friendly_summary") or "I'll keep tracking your code automatically."),
+                "local-learning",
+            )
+        except ValueError as err:
+            return (str(err), "local-learning")
+
     normalized = _app()._normalize_command(prompt)
+
+    # Sync / analyze linked code folder(s)
+    sync_match = _LEARNING_SYNC_FOLDER_PATTERN.fullmatch(normalized)
+    if sync_match:
+        rm_ref = (
+            sync_match.group("roadmap")
+            or sync_match.group("roadmap2")
+            or sync_match.group("roadmap3")
+            or ""
+        ).strip()
+        embed = getattr(_app().memory_store, "embed", None)
+        if rm_ref:
+            roadmap = _resolve_roadmap_from_context_or_ref(rm_ref, chat_id)
+            if roadmap is None:
+                return _learning_unknown_roadmap_reply(rm_ref)
+            try:
+                res = learning_code_rag.sync_roadmap_folder(int(roadmap["id"]), embed=embed)
+                return (res["friendly_summary"], "local-learning")
+            except ValueError as err:
+                return (str(err), "local-learning")
+        results = learning_code_rag.sync_all_linked_folders(embed=embed)
+        if not results:
+            return (
+                "No learning folders are linked yet! Say `link folder <path> to <roadmap>` or link one on the Learning page.",
+                "local-learning",
+            )
+        summaries = [r["friendly_summary"] for r in results if r.get("friendly_summary")]
+        return ("\n\n".join(summaries) or "Synced your learning folders.", "local-learning")
+
+    # Confirm or dismiss code-detected topic completion suggestions
+    code_sugg_match = _LEARNING_CODE_SUGGESTION_ACTION_PATTERN.fullmatch(normalized)
+    if code_sugg_match:
+        action = code_sugg_match.group("action").lower()
+        new_state = "confirmed" if action in {"confirm", "accept", "approve"} else "dismissed"
+        pending = learning_code_rag.list_code_suggestions(state="pending")
+        if not pending:
+            return ("You don't have any pending code completion suggestions right now.", "local-learning")
+        if code_sugg_match.group("all"):
+            names_done = []
+            for item in pending:
+                learning_code_rag.resolve_code_suggestion(int(item["id"]), new_state)
+                names_done.append(f"**{item['topic_name']}**")
+            verb = "Marked completed" if new_state == "confirmed" else "Dismissed"
+            return (f"{verb}: {', '.join(names_done)}.", "local-learning")
+        target = (code_sugg_match.group("target") or "").strip().lower()
+        chosen = pending[0]
+        if target:
+            if target.isdigit():
+                chosen = next((p for p in pending if p["id"] == int(target)), chosen)
+            else:
+                chosen = next((p for p in pending if target in p["topic_name"].lower()), chosen)
+        learning_code_rag.resolve_code_suggestion(int(chosen["id"]), new_state)
+        if new_state == "confirmed":
+            return (
+                f"Nice work — confirmed **{chosen['topic_name']}** as completed based on your code!",
+                "local-learning",
+            )
+        return (f"Got it, dismissed the completion suggestion for **{chosen['topic_name']}**.", "local-learning")
     if _LEARNING_PROGRESS_PATTERN.fullmatch(normalized) or _LEARNING_BARE_PATTERN.fullmatch(normalized):
         return _learning_progress_reply()
     if _LEARNING_NEXT_PATTERN.fullmatch(normalized):
@@ -820,7 +934,7 @@ def _learning_command(
 
     rm_delete = _LEARNING_ROADMAP_DELETE_PATTERN.fullmatch(normalized)
     if rm_delete:
-        ref = rm_delete.group(1).strip()
+        ref = (rm_delete.group(1) or rm_delete.group(2) or "").strip()
         roadmap = _resolve_roadmap_from_context_or_ref(ref, chat_id)
         if roadmap is None:
             return _learning_unknown_roadmap_reply(ref)
@@ -859,7 +973,7 @@ def _learning_command(
 
     t_delete = _LEARNING_TOPIC_DELETE_PATTERN.fullmatch(normalized)
     if t_delete:
-        ref = t_delete.group(1).strip()
+        ref = (t_delete.group(1) or t_delete.group(2) or "").strip()
         topics = _resolve_topic_from_context_or_ref(ref, chat_id)
         if not topics:
             raise ValueError(f"No topic matched '{ref}'.")

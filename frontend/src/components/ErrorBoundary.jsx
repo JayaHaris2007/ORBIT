@@ -16,6 +16,12 @@ class ErrorBoundary extends Component {
         console.error('Learning module crashed:', error, info);
     }
 
+    componentDidUpdate(prevProps) {
+        if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+            this.setState({ hasError: false, message: '' });
+        }
+    }
+
     handleReset = () => {
         this.setState({ hasError: false, message: '' });
     };
@@ -32,8 +38,11 @@ class ErrorBoundary extends Component {
                         </svg>
                     </div>
                     <div>
-                        <h2 className="text-lg font-semibold text-white">The learning tracker hit a snag</h2>
+                        <h2 className="text-lg font-semibold text-white">This view hit a snag</h2>
                         <p className="text-sm text-textMuted mt-1">Your other pages are unaffected.</p>
+                        {this.state.message && (
+                            <p className="mt-2 font-mono text-xs text-orange-300/80">{this.state.message}</p>
+                        )}
                     </div>
                     <button
                         onClick={this.handleReset}

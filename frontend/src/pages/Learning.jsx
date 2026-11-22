@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useAuth } from '../context/AuthContext';
+import { createPortal } from 'react-dom';
+import { useAuth, useTheme } from '../context/AuthContext';
 import { useAppData } from '../context/AppDataContext';
 import { learningService } from '../services/learningService';
 import {
     Plus, GraduationCap, Map, Target, Sparkles, Trash2,
-    BookOpen, TrendingUp, CheckCircle2,
+    BookOpen, TrendingUp, CheckCircle2, FolderCode,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import CircularProgress from '../components/CircularProgress';
 import ConfirmationModal from '../components/ConfirmationModal';
 import RoadmapDetail from '../components/learning/RoadmapDetail';
 import SuggestedLinks from '../components/learning/SuggestedLinks';
+import CodeSuggestions from '../components/learning/CodeSuggestions';
 
 const CATEGORIES = ['academic', 'technical', 'personal'];
 
@@ -29,6 +31,7 @@ const statusDot = {
 
 const Learning = () => {
     const { currentUser } = useAuth();
+    const { theme } = useTheme();
     const { revision } = useAppData();
 
     const [progress, setProgress] = useState(null);
@@ -270,6 +273,23 @@ const Learning = () => {
                                         </div>
                                     </div>
 
+                                    {roadmap.folderLink && (
+                                        <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-emerald-300/90 bg-emerald-500/10 rounded-lg px-3 py-1.5 border border-emerald-400/20">
+                                            <span className="flex items-center gap-1.5 truncate">
+                                                <FolderCode size={13} className="shrink-0 text-emerald-400" />
+                                                <span className="truncate">
+                                                    {roadmap.folderLink.lastSyncSummary?.practiced_files ?? 0} coded
+                                                    {(roadmap.folderLink.lastSyncSummary?.empty_files ?? 0) > 0
+                                                        ? ` · ${roadmap.folderLink.lastSyncSummary.empty_files} empty`
+                                                        : ''}
+                                                </span>
+                                            </span>
+                                            <span className="text-[10px] uppercase tracking-wider text-emerald-300/70 shrink-0">
+                                                RAG linked
+                                            </span>
+                                        </div>
+                                    )}
+
                                     {roadmap.nextTopic && (
                                         <div className="flex items-center gap-2 text-xs text-textMuted bg-white/5 rounded-lg px-3 py-2 border border-white/5">
                                             <Sparkles size={14} className="text-orange-400 shrink-0" />
@@ -282,6 +302,12 @@ const Learning = () => {
                     </div>
                 )}
             </section>
+
+            {/* Code folder completion suggestions */}
+            <CodeSuggestions
+                onChanged={loadAll}
+                hasLinkedFolders={roadmaps.some((r) => Boolean(r.folderLink))}
+            />
 
             {/* Suggested task links review queue */}
             <SuggestedLinks onChanged={loadAll} />
@@ -327,15 +353,17 @@ const Learning = () => {
             </section>
 
             {/* Create roadmap modal */}
-            <AnimatePresence>
-                {isCreateOpen && (
-                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-                        <motion.div
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            className="glass-card w-full max-w-md border border-white/10 p-6 relative"
-                        >
+            {createPortal(
+                <div className={`app-theme-${theme}`}>
+                    <AnimatePresence>
+                        {isCreateOpen && (
+                            <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                                <motion.div
+                                    initial={{ opacity: 0, scale: 0.95 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    exit={{ opacity: 0, scale: 0.95 }}
+                                    className="glass-card w-full max-w-md border border-white/10 p-6 relative text-text"
+                                >
                             <div className="absolute top-0 left-0 w-full h-1 bg-primary" />
                             <h3 className="text-xl font-bold text-white uppercase tracking-wide mb-4">New roadmap</h3>
                             <form onSubmit={handleCreateRoadmap} className="space-y-4">
@@ -413,10 +441,13 @@ const Learning = () => {
                                     </button>
                                 </div>
                             </form>
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+                                </motion.div>
+                            </div>
+                        )}
+                    </AnimatePresence>
+                </div>,
+                document.body
+            )}
 
             {/* Delete roadmap confirmation */}
             <ConfirmationModal

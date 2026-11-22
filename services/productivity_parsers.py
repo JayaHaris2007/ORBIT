@@ -328,16 +328,66 @@ def _parse_task_create(prompt: str) -> tuple[str, str] | None:
     return title, priority.lower()
 
 
+_TECH_TEXT_REPLACEMENTS = (
+    (re.compile(r"\bc\s*\+\s*\+", re.IGNORECASE), "cpp"),
+    (re.compile(r"\bc\s+plus\s+plus\b", re.IGNORECASE), "cpp"),
+    (re.compile(r"\bc\s*#", re.IGNORECASE), "csharp"),
+    (re.compile(r"\bc\s+sharp\b", re.IGNORECASE), "csharp"),
+    (re.compile(r"\bnode\.?js\b", re.IGNORECASE), "nodejs"),
+    (re.compile(r"\bnext\.?js\b", re.IGNORECASE), "nextjs"),
+    (re.compile(r"\breact\.?js\b", re.IGNORECASE), "reactjs"),
+    (re.compile(r"\boops\b", re.IGNORECASE), "oop"),
+)
+
+_DELETE_FILLER_TAIL = re.compile(
+    r"(?:\s*[,;\-]\s*|\s+)(?:"
+    r"(?:that|which)\s+i\s+(?:have\s+|'ve\s+)?(?:just\s+)?(?:added|created|made|put)\b.*"
+    r"|i\s+(?:have\s+|'ve\s+)?(?:just\s+)?(?:added|created|made|put)\b.*"
+    r"|because\b.*"
+    r"|since\s+i\b.*"
+    r"|for\s+testing\b.*"
+    r"|for\s+me\b.*"
+    r"|please\b.*"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_tech_text(value: str) -> str:
+    """Normalize programming symbols and spoken aliases (e.g. C++ / C plus plus -> cpp)."""
+    text = str(value or "").strip().lower()
+    for pattern, repl in _TECH_TEXT_REPLACEMENTS:
+        text = pattern.sub(repl, text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _strip_delete_filler(reference: str) -> str:
+    """Strip leading articles and conversational explanation tails from a delete target."""
+    cleaned = str(reference or "").strip(" \"'`?!.,;:")
+    cleaned = _DELETE_FILLER_TAIL.sub("", cleaned).strip(" \"'`?!.,;:")
+    cleaned = re.sub(r"^(?:the|my|that|this)\s+", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned
+
+
 def _fuzzy_best_match(
     query: str, items: list[dict[str, Any]], key: str, threshold: float = 0.76
 ) -> dict[str, Any] | None:
     """Return a single fuzzy match when the user has a minor typo (e.g. garder vs garden)."""
     if len(query) < 3 or not items:
         return None
+    tech_query = _normalize_tech_text(query)
     scored: list[tuple[float, dict[str, Any]]] = []
     for item in items:
         candidate = re.sub(r"\s+", " ", str(item.get(key, "")).strip().lower())
-        ratio = difflib.SequenceMatcher(None, query, candidate).ratio()
+        raw_ratio = difflib.SequenceMatcher(None, query, candidate).ratio()
+        tech_cand = _normalize_tech_text(candidate)
+        tech_ratio = (
+            difflib.SequenceMatcher(None, tech_query, tech_cand).ratio()
+            if (tech_query and tech_cand)
+            else 0.0
+        )
+        ratio = max(raw_ratio, tech_ratio)
         if ratio >= threshold:
             scored.append((ratio, item))
     if not scored:
@@ -351,8 +401,8 @@ def _fuzzy_best_match(
 def _find_task_reference(
     reference: str, include_completed: bool = True
 ) -> dict[str, Any] | None:
-    """Resolve '#12', '12', or a unique (partial or fuzzy) task title."""
-    cleaned = reference.strip().strip("#").strip()
+    """Resolve '#12', '12', or a unique (partial, tech-normalized, or fuzzy) task title."""
+    cleaned = _strip_delete_filler(reference).strip("#").strip()
     if not cleaned:
         return None
     tasks = _app().memory_store.list_tasks(include_completed=True)
@@ -363,13 +413,19 @@ def _find_task_reference(
         return next((task for task in tasks if task["id"] == task_id), None)
 
     normalized = re.sub(r"\s+", " ", cleaned.lower())
+    tech_norm = _normalize_tech_text(normalized)
+
     exact_matches = [
-        task for task in tasks if task["title"].strip().lower() == normalized
+        task for task in tasks
+        if task["title"].strip().lower() == normalized
+        or (tech_norm and _normalize_tech_text(task["title"]) == tech_norm)
     ]
     if len(exact_matches) == 1:
         return exact_matches[0]
     partial_matches = [
-        task for task in tasks if normalized in task["title"].strip().lower()
+        task for task in tasks
+        if normalized in task["title"].strip().lower()
+        or (tech_norm and tech_norm in _normalize_tech_text(task["title"]))
     ]
     if len(partial_matches) == 1:
         return partial_matches[0]
@@ -377,12 +433,12 @@ def _find_task_reference(
         raise ValueError(
             f"More than one task matches '{reference}'. Use 'task <number>'."
         )
-    requested_words = set(re.findall(r"[a-z0-9]+", normalized))
+    requested_words = set(tech_norm.split()) if tech_norm else set(re.findall(r"[a-z0-9]+", normalized))
     word_matches = [
         task for task in tasks
         if requested_words
         and requested_words.issubset(
-            set(re.findall(r"[a-z0-9]+", task["title"].lower()))
+            set(_normalize_tech_text(task["title"]).split())
         )
     ]
     if len(word_matches) == 1:
@@ -461,12 +517,39 @@ def _parse_task_update(prompt: str) -> tuple[str, str, str] | None:
 
 
 def _parse_task_delete(prompt: str) -> str | None:
+    normalized = _app()._normalize_command(prompt)
+    patterns = (
+        r"(?:delete|remove|drop|cancel|forget)\s+(?:(?:the|my)\s+)?(?:task|to[\s-]?do)\s+(.+)",
+        r"(?:delete|remove|drop|cancel|forget)\s+(?:(?:the|my)\s+)?(.+?)\s+"
+        r"(?:(?:in|from|on)\s+(?:(?:the|my)\s+)?(?:tasks?|task\s+list|to[\s-]?dos?|to[\s-]?do\s+list)|task|to[\s-]?do)",
+        r"(?:delete|remove|drop|cancel|forget)\s+#(\d+)",
+    )
+    for pattern in patterns:
+        match = re.fullmatch(pattern, normalized, re.IGNORECASE)
+        if match:
+            ref = _strip_delete_filler(match.group(1))
+            if ref:
+                return ref
+    return None
+
+
+def _parse_generic_delete(prompt: str) -> str | None:
+    """Catch natural 'remove X' / 'delete the oops I just added for testing' without an entity word."""
+    normalized = _app()._normalize_command(prompt)
+    # Explicit entity-typed deletes are handled by their dedicated parsers.
+    if re.search(r"\b(?:tasks?|to[\s-]?dos?|habits?|reminders?|alarms?|timers?|notes?|memor(?:y|ies)|roadmaps?|topics?)\b", normalized, re.IGNORECASE):
+        return None
     match = re.fullmatch(
-        r"(?:delete|remove|cancel|forget)\s+(?:(?:the|my)\s+)?task\s+(.+)",
-        _app()._normalize_command(prompt),
+        r"(?:delete|remove|drop|cancel)\s+(.+)",
+        normalized,
         re.IGNORECASE,
     )
-    return match.group(1).strip() if match else None
+    if not match:
+        return None
+    ref = _strip_delete_filler(match.group(1))
+    if not ref or ref.lower() in {"it", "that", "this", "them", "all", "everything"}:
+        return None
+    return ref
 
 
 def _has_negation_or_unmark(normalized: str) -> bool:
@@ -973,22 +1056,31 @@ def _parse_habit_rename(prompt: str) -> tuple[str, str] | None:
 
 
 def _parse_habit_delete(prompt: str) -> str | None:
-    match = re.fullmatch(
+    normalized = _app()._normalize_command(prompt)
+    patterns = (
         r"(?:delete|remove|stop|drop)\s+(?:(?:the|my)\s+)?habit\s+(.+)",
-        _app()._normalize_command(prompt),
-        re.IGNORECASE,
+        r"(?:delete|remove|stop|drop)\s+(?:(?:the|my)\s+)?(.+?)\s+"
+        r"(?:(?:in|from|on)\s+(?:(?:the|my)\s+)?habits?|habit)",
     )
-    return match.group(1).strip() if match else None
+    for pattern in patterns:
+        match = re.fullmatch(pattern, normalized, re.IGNORECASE)
+        if match:
+            ref = _strip_delete_filler(match.group(1))
+            if ref:
+                return ref
+    return None
 
 
 def _find_habit(habit_title: str) -> dict[str, Any] | None:
-    normalized_title = re.sub(r"\s+", " ", habit_title.strip().lower())
+    normalized_title = re.sub(r"\s+", " ", _strip_delete_filler(habit_title).lower())
     if not normalized_title:
         return None
+    tech_norm = _normalize_tech_text(normalized_title)
     habits = _app().memory_store.list_habits()
     exact_matches = [
         habit for habit in habits
         if habit["name"].strip().lower() == normalized_title
+        or (tech_norm and _normalize_tech_text(habit["name"]) == tech_norm)
     ]
     if len(exact_matches) == 1:
         return exact_matches[0]
@@ -996,6 +1088,7 @@ def _find_habit(habit_title: str) -> dict[str, Any] | None:
         habit for habit in habits
         if normalized_title in habit["name"].strip().lower()
         or habit["name"].strip().lower() in normalized_title
+        or (tech_norm and tech_norm in _normalize_tech_text(habit["name"]))
     ]
     if len(matches) > 1:
         raise ValueError(

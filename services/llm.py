@@ -220,7 +220,7 @@ def _productivity_context(prompt: str) -> str:
         r"\b(?:habits?|tasks?|to[\s-]?dos?|routine|schedule|productiv\w*|"
         r"improve\w*|discipline|goals?|learning|studying|study|topics?|course\w*|"
         r"skills?|practice|main\s+page|dashboard|page|app|nothing|there|pending|"
-        r"completed|done|list)\b",
+        r"completed|done|list|folder|code|coding|file|files|cpp|c\+\+|dsa|roadmap)\b",
         prompt,
         re.IGNORECASE,
     ):
@@ -242,6 +242,17 @@ def _productivity_context(prompt: str) -> str:
     else:
         lines.append("Pending tasks: none.")
     lines.extend(_app()._learning_digest())
+    if _app().learning_schema.is_initialized():
+        try:
+            from learning import code_rag
+
+            rag_ctx = code_rag.build_rag_prompt_context(
+                prompt, embed=_app().memory_store.embed, limit=3
+            )
+            if rag_ctx:
+                lines.append(rag_ctx)
+        except Exception:
+            pass
     return "\n".join(lines)
 
 
@@ -487,6 +498,10 @@ def _build_local_command_ui_actions(provider: str) -> tuple[str | None, list[dic
         ui_actions.append({"type": "refresh", "sections": ["habits", "gamification"]})
     elif provider == "local-task-manager":
         ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
+    elif provider == "local-scheduler":
+        ui_actions.append({"type": "refresh", "sections": ["reminders"]})
+    elif provider == "local-learning":
+        ui_actions.append({"type": "refresh", "sections": ["learning", "gamification"]})
     return nav, ui_actions
 
 

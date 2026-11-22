@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Link2, Check, X, RefreshCw, Loader2, ChevronDown,
 } from 'lucide-react';
 import { learningService } from '../../services/learningService';
+import { useAppData } from '../../context/AppDataContext';
 
 const sourceLabel = (source) => (
     source === 'embedding' ? 'semantic' : source === 'manual' ? 'manual' : 'rule'
@@ -15,18 +16,30 @@ const sourceLabel = (source) => (
  * it hides the suggestion.
  */
 const SuggestedLinks = ({ onChanged }) => {
+    const { revision } = useAppData();
     const [links, setLinks] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [scanning, setScanning] = useState(false);
     const [error, setError] = useState('');
     const [busyId, setBusyId] = useState(null);
     const [changingId, setChangingId] = useState(null);
     const [topicOptions, setTopicOptions] = useState([]);
     const [pickingId, setPickingId] = useState(null);
+    const autoScannedRef = useRef(false);
 
-    const load = useCallback(async () => {
+    const load = useCallback(async ({ autoScanIfEmpty = false } = {}) => {
         try {
             setError('');
-            setLinks(await learningService.listSuggestedLinks());
+            let items = await learningService.listSuggestedLinks();
+            if (autoScanIfEmpty && items.length === 0 && !autoScannedRef.current) {
+                autoScannedRef.current = true;
+                try {
+                    items = await learningService.scanSuggestedLinks();
+                } catch {
+                    // Fallback to already-loaded list if scan endpoint isn't available yet
+                }
+            }
+            setLinks(items);
         } catch (loadError) {
             setError(loadError.message || 'Could not load suggested links.');
         } finally {
@@ -34,7 +47,22 @@ const SuggestedLinks = ({ onChanged }) => {
         }
     }, []);
 
-    useEffect(() => { load(); }, [load]);
+    const handleScan = async () => {
+        setScanning(true);
+        setError('');
+        try {
+            const items = await learningService.scanSuggestedLinks();
+            setLinks(items);
+        } catch (scanError) {
+            setError(scanError.message || 'Could not scan open tasks.');
+        } finally {
+            setScanning(false);
+        }
+    };
+
+    useEffect(() => {
+        load({ autoScanIfEmpty: true });
+    }, [load, revision]);
 
     const handleAction = async (link, patch) => {
         setBusyId(link.id);
@@ -65,14 +93,26 @@ const SuggestedLinks = ({ onChanged }) => {
 
     return (
         <section className="space-y-4">
-            <div className="flex items-center gap-2 text-white/80">
-                <Link2 size={18} className="text-orange-400" />
-                <h2 className="text-lg font-semibold uppercase tracking-widest">Suggested task links</h2>
-                {!loading && links.length > 0 && (
-                    <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300 border border-orange-400/20">
-                        {links.length} to review
-                    </span>
-                )}
+            <div className="flex items-center justify-between gap-2 text-white/80">
+                <div className="flex items-center gap-2">
+                    <Link2 size={18} className="text-orange-400" />
+                    <h2 className="text-lg font-semibold uppercase tracking-widest">Suggested task links</h2>
+                    {!loading && links.length > 0 && (
+                        <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300 border border-orange-400/20">
+                            {links.length} to review
+                        </span>
+                    )}
+                </div>
+                <button
+                    type="button"
+                    onClick={handleScan}
+                    disabled={scanning || loading}
+                    className="flex items-center gap-1.5 border border-white/15 bg-white/5 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-textMuted transition-colors hover:border-orange-400/50 hover:text-white disabled:opacity-50"
+                    title="Scan open tasks for matching learning topics"
+                >
+                    <RefreshCw size={12} className={scanning ? 'animate-spin' : ''} />
+                    <span>{scanning ? 'Scanning…' : 'Scan tasks'}</span>
+                </button>
             </div>
 
             {error && (

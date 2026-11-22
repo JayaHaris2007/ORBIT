@@ -277,10 +277,23 @@ button:active:not(:disabled) { transform: translateY(1px); }
   opacity: 0.95;
 }
 
+@media (min-width: 768px) {
+  html.navbar-minimized .app-main-shell { margin-left: 72px; }
+}
+
 @media (min-width: 1280px) {
-  .workspace-sidebar { transform: none; }
+  .workspace-sidebar {
+    transform: none;
+    width: var(--spidey-agent-width, 390px);
+    max-width: none;
+  }
   .workspace-toggle, .workspace-close, .workspace-backdrop { display: none; }
-  .app-main-shell { margin-right: 390px; }
+  .app-main-shell { margin-right: var(--spidey-agent-width, 390px); }
+  html.spidey-resizing .app-main-shell,
+  html.spidey-resizing .workspace-sidebar {
+    transition: none !important;
+    user-select: none;
+  }
   html.spidey-minimized .app-main-shell { margin-right: 0; }
   html.spidey-minimized .workspace-sidebar { transform: translateX(102%); }
   html.spidey-minimized .workspace-toggle { display: flex; }

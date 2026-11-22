@@ -5,7 +5,6 @@ import { taskService } from '../services/taskService';
 import { Plus, Search } from 'lucide-react';
 import TaskCard from '../components/TaskCard';
 import TaskEditor from '../components/TaskEditor';
-import { AnimatePresence } from 'framer-motion';
 
 import ConfirmationModal from '../components/ConfirmationModal';
 
@@ -61,7 +60,7 @@ const Todos = () => {
                         ['high', 'medium', 'low'].includes(filter) ? (!task.completed && task.priority === filter) :
                             !task.completed;
 
-        const matchesSearch = task.title.toLowerCase().includes(search.toLowerCase());
+        const matchesSearch = String(task.title || '').toLowerCase().includes(search.toLowerCase());
 
         return matchesFilter && matchesSearch;
     });
@@ -117,7 +116,7 @@ const Todos = () => {
     }
 
     return (
-        <div className="pb-20">
+        <div className="mx-auto max-w-6xl pb-20">
             <div className="mb-8 flex flex-col items-start justify-between gap-4 border-b border-[#F2EFE9]/15 pb-5 md:flex-row md:items-end">
                 <div>
                     <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">03 · Execution</span>
@@ -134,10 +133,10 @@ const Todos = () => {
                 </button>
             </div>
 
-            <div className="grid grid-cols-1 items-start gap-6 2xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
                 <div className="min-w-0">
                     {/* Controls */}
-                    <div className="mb-6 flex flex-col gap-3">
+                    <div className="mb-6 flex max-w-2xl flex-col gap-3">
                         <div className="relative w-full">
                             <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#9C968E]" size={16} />
                             <input
@@ -172,25 +171,26 @@ const Todos = () => {
                         </div>
                     </div>
 
-                    {/* Task List */}
-                    <div data-spidey-section="tasks" className="space-y-3">
-                        <AnimatePresence>
-                            {sortedTasks.map(task => (
-                                <TaskCard
-                                    key={task.id}
-                                    task={task}
-                                    onToggle={handleToggleTask}
-                                    onEdit={setEditingTask}
-                                    onDelete={(id) => {
-                                        setTaskToDelete(id);
-                                        setIsDeleteModalOpen(true);
-                                    }}
-                                />
-                            ))}
-                        </AnimatePresence>
+                    {/* Task List — fixed-proportion cards that never stretch awkwardly on wide screens */}
+                    <div
+                        data-spidey-section="tasks"
+                        className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(270px,360px))]"
+                    >
+                        {sortedTasks.map(task => (
+                            <TaskCard
+                                key={task.id}
+                                task={task}
+                                onToggle={handleToggleTask}
+                                onEdit={setEditingTask}
+                                onDelete={(id) => {
+                                    setTaskToDelete(id);
+                                    setIsDeleteModalOpen(true);
+                                }}
+                            />
+                        ))}
 
                         {sortedTasks.length === 0 && (
-                            <div className="border border-[#F2EFE9]/14 bg-[#151515] py-16 text-center font-mono text-xs uppercase tracking-[0.14em] text-[#9C968E]">
+                            <div className="col-span-full max-w-2xl border border-[#F2EFE9]/14 bg-[#151515] py-16 text-center font-mono text-xs uppercase tracking-[0.14em] text-[#9C968E]">
                                 Nothing here yet. You&apos;re doing great.
                             </div>
                         )}

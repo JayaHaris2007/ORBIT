@@ -242,3 +242,31 @@ def test_llm_fallback_catches_crashes(store):
 
     assert classifier.suggest_links_for_task(task_id, llm=crashing_llm) == []
     assert _links(store) == []
+
+
+def test_compound_subpart_and_cpp_roadmap_matching(store):
+    progress.import_learning_path(
+        name="C++ with DSA",
+        topics=["Basics & Compilation", "Polymorphism & Virtual Functions", "Pointers"],
+        category="technical",
+        auto_generate_if_empty=False,
+    )
+    t1 = _make_task(store, "learning C++ basics")
+    created1 = classifier.suggest_links_for_task(t1)
+    assert len(created1) == 1
+    links1 = [l for l in _links(store) if l["task_id"] == t1]
+    assert links1[0]["topic_id"] == _topic_id(store, "Basics & Compilation")
+    assert links1[0]["confidence"] == classifier.RULE_SUBPART_ROADMAP_CONFIDENCE
+
+    t2 = _make_task(store, "practice virtual functions")
+    created2 = classifier.suggest_links_for_task(t2)
+    assert len(created2) == 1
+    links2 = [l for l in _links(store) if l["task_id"] == t2]
+    assert links2[0]["topic_id"] == _topic_id(store, "Polymorphism & Virtual Functions")
+
+    # Generic "basics" from Java must NOT falsely match C++ "Basics & Compilation"
+    with _connect(store) as conn:
+        conn.execute("UPDATE topics SET status = 'completed' WHERE name = 'Java Basics'")
+    t3 = _make_task(store, "Study Java basics again")
+    assert classifier.suggest_links_for_task(t3) == []
+

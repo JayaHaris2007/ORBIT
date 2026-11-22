@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from . import progress, schema
+from . import classifier, code_rag, progress, schema
 
 LOGGER = logging.getLogger("spidey.learning.api")
 
@@ -99,7 +99,7 @@ def create_roadmap(payload: schema.RoadmapIn = Body(...)) -> dict[str, Any]:
 def import_roadmap(payload: schema.LearningPathImportIn = Body(...)) -> dict[str, Any]:
     """Create or populate a learning roadmap by automatically splitting pasted sub-topics."""
     try:
-        return progress.import_learning_path(
+        res = progress.import_learning_path(
             name=payload.name,
             raw_text=payload.raw_text,
             topics=payload.topics,
@@ -108,6 +108,11 @@ def import_roadmap(payload: schema.LearningPathImportIn = Body(...)) -> dict[str
             priority=payload.priority,
             auto_generate_if_empty=payload.auto_subtopics,
         )
+        try:
+            classifier.suggest_links_for_all_open_tasks()
+        except Exception:
+            pass
+        return res
     except ValueError as err:
         raise HTTPException(400, str(err)) from err
 
@@ -119,7 +124,7 @@ def bulk_create_topics(
     """Bulk-add multiple sub-topics (from pasted lines or list) into an existing roadmap."""
     roadmap = _get_roadmap(roadmap_id)
     try:
-        return progress.import_learning_path(
+        res = progress.import_learning_path(
             name=roadmap["name"],
             raw_text=payload.raw_text,
             topics=payload.topics,
@@ -127,6 +132,11 @@ def bulk_create_topics(
             priority=payload.priority,
             auto_generate_if_empty=False,
         )
+        try:
+            classifier.suggest_links_for_all_open_tasks()
+        except Exception:
+            pass
+        return res
     except ValueError as err:
         raise HTTPException(400, str(err)) from err
 
@@ -320,6 +330,16 @@ def get_next(limit: int = Query(progress.NEXT_TOPIC_LIMIT, ge=1, le=20)) -> dict
     return {"next": progress.next_topics(limit=limit)}
 
 
+@router.post("/links/scan")
+def scan_links() -> dict[str, Any]:
+    """Scan all open tasks against open learning topics and return suggested links."""
+    created = classifier.suggest_links_for_all_open_tasks()
+    return {
+        "created": created,
+        "links": progress.list_suggested_links(),
+    }
+
+
 @router.get("/links")
 def list_links(state: str = Query("suggested")) -> dict[str, Any]:
     if state not in schema.LINK_STATES:
@@ -373,3 +393,144 @@ def get_settings() -> dict[str, Any]:
 def update_settings(payload: schema.SettingsPatch = Body(...)) -> dict[str, Any]:
     progress.set_setting(progress.NUDGES_KEY, "1" if payload.nudges_enabled else "0")
     return {"nudges_enabled": payload.nudges_enabled}
+
+
+# ---------------------------------------------------------------------------
+# Local Folder Auto-Tracking & Hybrid Code RAG Endpoints
+# ---------------------------------------------------------------------------
+
+
+def _shared_embedder():
+    try:
+        import app
+
+        return app.memory_store.embed
+    except Exception:
+        return None
+
+
+@router.get("/folders")
+def list_folders() -> dict[str, Any]:
+    return {"folders": code_rag.list_folder_links()}
+
+
+@router.post("/folders/pick")
+def pick_folder(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    """Open a native OS folder picker window on the local machine and return the chosen path."""
+    initial_dir = (payload or {}).get("initial_dir") if isinstance(payload, dict) else None
+    try:
+        chosen = code_rag.pick_local_folder(initial_dir=initial_dir)
+    except RuntimeError as err:
+        raise HTTPException(500, str(err)) from err
+    if not chosen:
+        return {"cancelled": True, "folder_path": None}
+    return {"cancelled": False, "folder_path": chosen}
+
+
+@router.post("/roadmaps/{roadmap_id}/folder/open")
+def open_roadmap_folder(roadmap_id: int) -> dict[str, Any]:
+    """Open the roadmap's linked folder in the OS File Explorer."""
+    _get_roadmap(roadmap_id)
+    link = code_rag.get_folder_link(roadmap_id)
+    if link is None:
+        raise HTTPException(404, "No folder is linked to this roadmap.")
+    try:
+        code_rag.open_folder_in_explorer(link["folder_path"])
+        return {"status": "opened", "folder_path": link["folder_path"]}
+    except ValueError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@router.put("/roadmaps/{roadmap_id}/folder")
+def link_roadmap_folder(
+    roadmap_id: int, payload: schema.FolderLinkIn = Body(...)
+) -> dict[str, Any]:
+    _get_roadmap(roadmap_id)
+    try:
+        return code_rag.link_folder_to_roadmap(
+            roadmap_id,
+            payload.folder_path,
+            enabled=payload.enabled,
+            sync_now=True,
+            embed=_shared_embedder(),
+        )
+    except ValueError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@router.delete("/roadmaps/{roadmap_id}/folder")
+def unlink_roadmap_folder(roadmap_id: int) -> dict[str, Any]:
+    _get_roadmap(roadmap_id)
+    removed = code_rag.unlink_folder_from_roadmap(roadmap_id)
+    return {"status": "unlinked" if removed else "not_linked"}
+
+
+@router.post("/roadmaps/{roadmap_id}/sync")
+def sync_roadmap_folder(roadmap_id: int) -> dict[str, Any]:
+    _get_roadmap(roadmap_id)
+    try:
+        return code_rag.sync_roadmap_folder(roadmap_id, embed=_shared_embedder())
+    except ValueError as err:
+        raise HTTPException(400, str(err)) from err
+
+
+@router.post("/folders/sync-all")
+def sync_all_folders() -> dict[str, Any]:
+    results = code_rag.sync_all_linked_folders(embed=_shared_embedder())
+    return {
+        "results": results,
+        "suggestions": code_rag.list_code_suggestions(state="pending"),
+    }
+
+
+@router.get("/roadmaps/{roadmap_id}/code-insights")
+def get_roadmap_code_insights(roadmap_id: int) -> dict[str, Any]:
+    _get_roadmap(roadmap_id)
+    try:
+        return code_rag.get_roadmap_code_insights(roadmap_id)
+    except ValueError as err:
+        raise HTTPException(404, str(err)) from err
+
+
+@router.get("/code-suggestions")
+def list_code_suggestions(
+    roadmap_id: int | None = Query(None),
+    state: str = Query("pending"),
+) -> dict[str, Any]:
+    if state not in schema.CODE_SUGGESTION_STATES:
+        raise HTTPException(400, f"'state' must be one of {schema.CODE_SUGGESTION_STATES}.")
+    return {
+        "suggestions": code_rag.list_code_suggestions(roadmap_id=roadmap_id, state=state)
+    }
+
+
+@router.patch("/code-suggestions/{suggestion_id}")
+def patch_code_suggestion(
+    suggestion_id: int, payload: schema.CodeSuggestionPatch = Body(...)
+) -> dict[str, Any]:
+    try:
+        updated = code_rag.resolve_code_suggestion(suggestion_id, payload.state)
+        if payload.state == "confirmed":
+            try:
+                import app
+
+                if hasattr(app.memory_store, "award_xp"):
+                    app.memory_store.award_xp(
+                        25, reason=f"Completed learning topic from code: {updated['topic_name']}"
+                    )
+            except Exception:
+                pass
+        return updated
+    except ValueError as err:
+        raise HTTPException(404, str(err)) from err
+
+
+@router.post("/rag/search")
+def search_code_rag_endpoint(payload: schema.CodeRagQueryIn = Body(...)) -> dict[str, Any]:
+    hits = code_rag.search_code_rag(
+        payload.query,
+        roadmap_id=payload.roadmap_id,
+        limit=payload.limit,
+        embed=_shared_embedder(),
+    )
+    return {"query": payload.query, "results": hits}

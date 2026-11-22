@@ -98,10 +98,34 @@ def _task_title(connection: sqlite3.Connection, task_id: int) -> str | None:
     return row["title"] if row is not None else None
 
 
+RULE_SUBPART_ROADMAP_CONFIDENCE = 0.90
+RULE_SUBPART_CONFIDENCE = 0.82
+
+GENERIC_SUBPART_WORDS = {
+    "basics", "basic", "fundamentals", "fundamental", "introduction", "intro",
+    "overview", "setup", "practice", "review", "project", "projects",
+    "advanced", "modern", "concepts", "core", "syntax", "getting", "started",
+}
+
+_TOKEN_SYNONYMS = {
+    "cpp": "c++",
+    "cplusplus": "c++",
+    "csharp": "c#",
+    "js": "javascript",
+    "ts": "typescript",
+    "py": "python",
+    "oop": "object",
+}
+
+_COMPOUND_SPLIT = re.compile(r"\s*(?:&|/|,|\band\b|\bor\b|:|—|–|\s-\s)\s*", re.IGNORECASE)
+
+
 def _open_topics(connection: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Topics that can still receive links, across every roadmap."""
+    """Topics that can still receive links, across every roadmap (with roadmap_name)."""
     return connection.execute(
-        "SELECT * FROM topics WHERE status != 'completed'"
+        "SELECT t.*, r.name AS roadmap_name "
+        "FROM topics AS t JOIN roadmaps AS r ON r.id = t.roadmap_id "
+        "WHERE t.status != 'completed'"
     ).fetchall()
 
 
@@ -114,10 +138,12 @@ def _topic_aliases(topic: sqlite3.Row) -> list[str]:
 
 
 def _significant_tokens(text: str) -> list[str]:
-    return [
-        token for token in re.findall(r"[a-z0-9]+", text.lower())
-        if len(token) >= 2 and token not in TOKEN_STOPWORDS
-    ]
+    tokens: list[str] = []
+    for raw in re.findall(r"[a-z0-9]+(?:\+\+|#)?", text.lower()):
+        norm = _TOKEN_SYNONYMS.get(raw, raw)
+        if len(norm) >= 2 and norm not in TOKEN_STOPWORDS:
+            tokens.append(norm)
+    return tokens
 
 
 def _token_hits(name_token: str, title_token: str) -> bool:
@@ -147,30 +173,90 @@ def _token_matches(title_tokens: list[str], name: str) -> bool:
     return True
 
 
+def _roadmap_matches_title(title_tokens: list[str], roadmap_name: str) -> bool:
+    """Return True if at least one distinctive roadmap token appears in the task title."""
+    rm_tokens = [
+        tok for tok in _significant_tokens(roadmap_name)
+        if tok not in {"with", "for", "and", "roadmap", "learning", "path", "course", "basics", "guide"}
+    ]
+    if not rm_tokens or not title_tokens:
+        return False
+    return any(
+        _token_hits(rm_tok, title_tok)
+        for rm_tok in rm_tokens
+        for title_tok in title_tokens
+    )
+
+
 def _rule_matches(title: str, topics: list[sqlite3.Row]) -> list[tuple[int, float, str]]:
     """Topic ids the rules match, with confidence and source each."""
     title_lower = title.lower()
     title_tokens = _significant_tokens(title_lower)
-    matches: list[tuple[int, float, str]] = []
+    exact_matches: list[tuple[int, float, str]] = []
+    subpart_matches: list[tuple[int, float, str]] = []
+    matched_ids: set[int] = set()
+
     for topic in topics:
         names = [topic["name"], *_topic_aliases(topic)]
+        matched_exact = False
         for name in names:
             name_lower = name.lower()
             if not name_lower:
                 continue
             if name_lower in title_lower or title_lower in name_lower:
-                matches.append((topic["id"], 1.0, "rule"))
+                exact_matches.append((topic["id"], 1.0, "rule"))
+                matched_ids.add(topic["id"])
+                matched_exact = True
                 break
-            # Fuzzy spelling tolerance, but every significant word of the
-            # topic must be present in the title to stay precise.
+            # Fuzzy spelling tolerance, requiring every significant word of the
+            # topic to be present in the title.
             ratio = fuzz.partial_ratio(title_lower, name_lower)
             if (
                 ratio >= RULE_FUZZ_THRESHOLD
                 and _token_matches(title_tokens, name_lower)
             ):
-                matches.append((topic["id"], RULE_FUZZ_CONFIDENCE, "rule"))
+                exact_matches.append((topic["id"], RULE_FUZZ_CONFIDENCE, "rule"))
+                matched_ids.add(topic["id"])
+                matched_exact = True
                 break
-    return matches
+
+        if matched_exact:
+            continue
+
+        # Pass B: Compound sub-part + roadmap context matching
+        # e.g. task "learning C++ basics" -> topic "Basics & Compilation" in roadmap "C++ with DSA"
+        roadmap_name = ""
+        try:
+            roadmap_name = topic["roadmap_name"] or ""
+        except (KeyError, IndexError):
+            roadmap_name = ""
+        has_roadmap_match = _roadmap_matches_title(title_tokens, roadmap_name)
+
+        subparts = [p.strip() for p in _COMPOUND_SPLIT.split(topic["name"]) if p.strip()]
+        if len(subparts) <= 1:
+            # Single-part topic name: allow roadmap + token hit if title mentions roadmap + topic
+            continue
+
+        for part in subparts:
+            part_tokens = _significant_tokens(part)
+            if not part_tokens:
+                continue
+            if not _token_matches(title_tokens, part):
+                continue
+            is_generic = all(tok in GENERIC_SUBPART_WORDS for tok in part_tokens)
+            if is_generic and not has_roadmap_match:
+                continue
+            if not is_generic and not has_roadmap_match and len(part_tokens) == 1 and len(part_tokens[0]) < 5:
+                continue
+            conf = RULE_SUBPART_ROADMAP_CONFIDENCE if has_roadmap_match else RULE_SUBPART_CONFIDENCE
+            subpart_matches.append((topic["id"], conf, "rule"))
+            matched_ids.add(topic["id"])
+            break
+
+    if exact_matches:
+        return exact_matches
+    subpart_matches.sort(key=lambda item: item[1], reverse=True)
+    return subpart_matches[:TOPIC_MATCH_LIMIT]
 
 
 def _topic_text(topic: sqlite3.Row) -> str:

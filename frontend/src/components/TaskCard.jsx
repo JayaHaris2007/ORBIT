@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion';
 import { Check, Trash2, Calendar, AlertCircle, Pencil } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -10,15 +9,10 @@ const priorityStyles = {
 
 const TaskCard = ({ task, onToggle, onDelete, onEdit }) => {
     return (
-        <motion.div
-            layout
+        <div
             data-spidey-card="task"
             data-spidey-title={task.title || ''}
             data-spidey-completed={task.completed ? 'true' : 'false'}
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 8 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className={`group flex items-start justify-between gap-3 border border-[#F2EFE9]/14 bg-[#151515] p-4 transition-colors hover:border-[#F2EFE9]/30 ${
                 task.completed ? 'opacity-45' : ''
             }`}
@@ -46,7 +40,7 @@ const TaskCard = ({ task, onToggle, onDelete, onEdit }) => {
                     )}
 
                     <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em]">
-                        {task.dueDate && (
+                        {task.dueDate && !Number.isNaN(new Date(task.dueDate).getTime()) && (
                             <span className="inline-flex items-center gap-1 border border-[#F2EFE9]/15 bg-[#111111] px-2 py-0.5 text-[#9C968E]">
                                 <Calendar size={10} />
                                 {format(new Date(task.dueDate), 'MMM d')}
@@ -81,7 +75,7 @@ const TaskCard = ({ task, onToggle, onDelete, onEdit }) => {
                     <Trash2 size={14} />
                 </button>
             </div>
-        </motion.div>
+        </div>
     );
 };
 

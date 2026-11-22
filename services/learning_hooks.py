@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 def _app():
     import app
@@ -64,6 +66,82 @@ def _run_learning_hook(job) -> None:
 
 
 WEEKLY_LEARNING_NUDGE_JOB = "weekly-learning-nudge"
+FOLDER_SYNC_JOB = "learning-folder-sync"
+DEFAULT_FOLDER_SYNC_MINUTES = int(os.environ.get("ORBIT_FOLDER_SYNC_MINUTES", "2").strip() or "2")
+
+
+def _notify_new_code_suggestions(sync_results: list[dict]) -> None:
+    """When newly added/edited code matches a topic, ask the user in chat whether to mark it completed."""
+    a = _app()
+    new_items: list[dict] = []
+    for res in sync_results:
+        for sugg in res.get("new_suggestions") or []:
+            new_items.append(sugg)
+    if not new_items:
+        return
+    try:
+        chat_ids = a.memory_store.list_local_chat_ids()
+        if not chat_ids:
+            a._ensure_chat_exists(a.DEFAULT_CHAT_ID)
+            chat_ids = [a.DEFAULT_CHAT_ID]
+        target_chat = chat_ids[0]
+
+        if len(new_items) == 1:
+            s = new_items[0]
+            msg = (
+                f"Hey! I checked your new code in `{s['files']}` ({s['reason']}) for "
+                f"**{s['roadmap_name']}** — looks like you practiced **{s['topic_name']}**. "
+                f"Want me to mark **{s['topic_name']}** as completed, or keep it in progress? "
+                f"(Say `confirm code suggestion` or click Confirm on the Learning page.)"
+            )
+            notif_key = f"code-sugg-{s['topic_id']}-{s['files']}"
+        else:
+            names = ", ".join(f"**{s['topic_name']}** (`{s['files']}`)" for s in new_items[:3])
+            msg = (
+                f"Hey! I spotted new practice code for {names}. "
+                "Want me to mark them completed, or keep them in progress? "
+                "(Say `confirm all code suggestions` or review them on the Learning page.)"
+            )
+            notif_key = f"code-sugg-batch-{new_items[0]['topic_id']}-{len(new_items)}"
+
+        a.memory_store.add_notification(target_chat, notif_key, msg)
+        try:
+            a._push_reminder_alert({"id": notif_key, "chat_id": target_chat, "text": msg}, msg)
+        except Exception:
+            pass
+    except Exception as error:  # pragma: no cover - defensive
+        a.LOGGER.debug("Code suggestion notification skipped: %s", error)
+
+
+def _sync_learning_folders_background() -> list[dict]:
+    """Incrementally sync all linked learning folders off the request path."""
+    if not _app().learning_schema.is_initialized():
+        return []
+    try:
+        from learning import code_rag
+
+        embed = getattr(_app().memory_store, "embed", None)
+        results = code_rag.sync_all_linked_folders(embed=embed)
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            _notify_new_code_suggestions(results)
+        return results
+    except Exception as error:  # pragma: no cover - defensive
+        _app().LOGGER.debug("Background learning folder sync skipped: %s", error)
+        return []
+
+
+def _schedule_folder_sync(provider: str = "local") -> None:
+    if not _app().learning_schema.is_initialized() or DEFAULT_FOLDER_SYNC_MINUTES <= 0:
+        return
+    try:
+        _app().reminder_scheduler.add_job(
+            _sync_learning_folders_background,
+            IntervalTrigger(minutes=DEFAULT_FOLDER_SYNC_MINUTES, timezone=_app().LOCAL_TIMEZONE),
+            id=FOLDER_SYNC_JOB if provider == "local" else f"{FOLDER_SYNC_JOB}-{provider}",
+            replace_existing=True,
+        )
+    except Exception as error:  # pragma: no cover - defensive
+        _app().LOGGER.debug("Learning folder sync schedule skipped: %s", error)
 
 
 def _weekly_learning_nudge(provider: str = "local") -> None:
@@ -108,6 +186,10 @@ def init_learning_module(provider: str = "local") -> bool:
         _app().learning_schema.init(_app().DATABASE_PATH)
         _app().learning_roadmaps.load_seeds()
         _app()._schedule_weekly_learning_nudge(provider)
+        _schedule_folder_sync(provider)
+        # Run a quick initial non-blocking sync on startup so RAG & insights stay fresh
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            _run_learning_hook(_sync_learning_folders_background)
         return _app().learning_schema.is_initialized()
     except Exception as error:  # pragma: no cover - defensive
         _app().LOGGER.debug("Learning module init skipped: %s", error)
