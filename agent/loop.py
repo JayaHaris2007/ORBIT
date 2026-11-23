@@ -43,7 +43,7 @@ MAX_CALLS_PER_TURN = 12
 TURN_TIMEOUT_SECONDS = 60.0
 
 TOOL_TURN_SYSTEM_PROMPT = (
-    "You are S.P.I.D.E.Y., Jaya's personal AI assistant and technical co-pilot. "
+    "You are ORBIT, Jaya's personal AI assistant and technical co-pilot. "
     "Talk naturally like a smart, friendly, attentive person. Use conversational English. "
     "\n\nTool usage rules:\n"
     "1. Use tools to act on the user's data and to answer anything about the user's tasks, "

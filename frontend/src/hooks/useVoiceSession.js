@@ -1,18 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { emitBrainAudioLevel, emitBrainState } from '../context/SpideyBrainContext';
-import { API_BASE_URL } from '../services/api';
 import { AudioQueue, stopVoiceTurn } from '../services/voiceService';
 
 export function useVoiceSession({ onTranscript = null, onReply = null, audioQueue = null }) {
-    const [state, setState] = useState('idle'); // idle | listening | transcribing | thinking | speaking
+    const [state, setState] = useState('idle'); // idle | connecting | listening | transcribing | thinking | speaking
     const [transcript, setTranscript] = useState('');
     const [reply, setReply] = useState('');
     const [error, setError] = useState(null);
     const [mode, setMode] = useState('live');
+    const [isMuted, setIsMuted] = useState(false);
     const [timing, setTiming] = useState({ speechEnd: 0, transcript: 0, firstSentence: 0, firstAudio: 0, total: 0 });
 
     const modeRef = useRef('live');
+    const mutedRef = useRef(false);
+    const sessionEpochRef = useRef(0);
     const wsRef = useRef(null);
+    const onTranscriptRef = useRef(onTranscript);
+    const onReplyRef = useRef(onReply);
+    useEffect(() => {
+        onTranscriptRef.current = onTranscript;
+        onReplyRef.current = onReply;
+    }, [onTranscript, onReply]);
+
     const micStreamRef = useRef(null);
     const audioContextRef = useRef(null);
     const workletNodeRef = useRef(null);
@@ -59,31 +68,54 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
     }, []);
 
     const stopSession = useCallback(() => {
+        sessionEpochRef.current += 1;
         cleanupAudioCapture();
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        if (wsRef.current) {
+            const sock = wsRef.current;
+            wsRef.current = null;
             try {
-                wsRef.current.send(JSON.stringify({ type: 'stop' }));
-                wsRef.current.close();
+                if (sock.readyState === WebSocket.OPEN) {
+                    sock.send(JSON.stringify({ type: 'stop' }));
+                }
+                sock.close();
             } catch { /* ignore */ }
         }
-        wsRef.current = null;
         queueRef.current.stop();
         stopVoiceTurn().catch(() => {});
+        mutedRef.current = false;
+        setIsMuted(false);
         setState('idle');
         emitBrainAudioLevel(0);
         emitBrainState('idle');
         setTranscript('');
+        setReply('');
     }, [cleanupAudioCapture]);
+
+    const toggleMute = useCallback(() => {
+        const next = !mutedRef.current;
+        mutedRef.current = next;
+        setIsMuted(next);
+        if (next) {
+            emitBrainAudioLevel(0);
+        }
+    }, []);
 
     const interrupt = useCallback(() => {
         queueRef.current.stop();
+        emitBrainAudioLevel(0);
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ type: 'interrupt' }));
+            if (modeRef.current === 'live') {
+                setState('listening');
+                emitBrainState('listening');
+            }
         }
     }, []);
 
     const commitUtterance = useCallback(() => {
-        cleanupAudioCapture();
+        if (modeRef.current === 'ptt') {
+            cleanupAudioCapture();
+        }
         emitBrainAudioLevel(0);
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             try {
@@ -103,23 +135,35 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
     const startSession = useCallback(
         async (sessionMode = 'live', chatId = null) => {
             stopSession();
+            const epoch = sessionEpochRef.current;
             setMode(sessionMode);
             modeRef.current = sessionMode;
+            mutedRef.current = false;
+            setIsMuted(false);
             setError(null);
             setTranscript('');
             setReply('');
+            setState('connecting');
+            emitBrainState('listening');
             timingRef.current = { speechEnd: 0, transcript: 0, firstSentence: 0, firstAudio: 0 };
 
             try {
+                // Ensure browser AudioContext for TTS playback is unlocked on user gesture
+                queueRef.current?.ensureContext?.();
+
                 // 1. Get mic permission with echo cancellation
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
                         autoGainControl: true,
-                        channelCount: 1
-                    }
+                        channelCount: 1,
+                    },
                 });
+                if (epoch !== sessionEpochRef.current) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    return;
+                }
                 micStreamRef.current = stream;
 
                 // 2. Setup AudioContext (prefer 16 kHz if supported)
@@ -129,10 +173,22 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                 } catch {
                     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 }
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume().catch(() => {});
+                }
+                if (epoch !== sessionEpochRef.current) {
+                    audioCtx.close().catch(() => {});
+                    stream.getTracks().forEach((t) => t.stop());
+                    return;
+                }
                 audioContextRef.current = audioCtx;
 
                 // 3. Load AudioWorklet
                 await audioCtx.audioWorklet.addModule('/audio-worklet/pcm-capture.js');
+                if (epoch !== sessionEpochRef.current) {
+                    cleanupAudioCapture();
+                    return;
+                }
                 const source = audioCtx.createMediaStreamSource(stream);
                 const workletNode = new AudioWorkletNode(audioCtx, 'pcm-capture-processor');
                 workletNodeRef.current = workletNode;
@@ -144,12 +200,21 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                 wsRef.current = ws;
 
                 ws.onopen = () => {
+                    if (epoch !== sessionEpochRef.current) {
+                        ws.close();
+                        return;
+                    }
                     ws.send(JSON.stringify({ type: 'start', mode: sessionMode, chat_id: chatId }));
                     setState('listening');
                     emitBrainState('listening');
                 };
 
                 workletNode.port.onmessage = (event) => {
+                    if (epoch !== sessionEpochRef.current) return;
+                    if (mutedRef.current) {
+                        emitBrainAudioLevel(0);
+                        return;
+                    }
                     // Gate mic capture while browser TTS speakers are playing (+500ms echo tail)
                     // so Spidey never hears its own voice or cuts itself off mid-sentence.
                     if (queueRef.current?.isPlaybackActive?.(500)) {
@@ -171,12 +236,13 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                                 count++;
                             }
                             const rms = Math.sqrt(sumSq / Math.max(1, count));
-                            emitBrainAudioLevel(Math.min(1, rms * 4.5));
+                            emitBrainAudioLevel(Math.min(1, rms * 4.8));
                         }
                     }
                 };
 
                 ws.onmessage = async (event) => {
+                    if (epoch !== sessionEpochRef.current) return;
                     if (typeof event.data === 'string') {
                         try {
                             const data = JSON.parse(event.data);
@@ -184,8 +250,9 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                                 const stillSpeakingLocally =
                                     (data.value === 'listening' || data.value === 'idle')
                                     && queueRef.current?.isPlaybackActive?.(0);
-                                setState(stillSpeakingLocally ? 'speaking' : data.value);
-                                emitBrainState(stillSpeakingLocally ? 'speaking' : data.value);
+                                const nextSt = stillSpeakingLocally ? 'speaking' : data.value;
+                                setState(nextSt);
+                                emitBrainState(nextSt);
                                 if (data.value === 'transcribing') {
                                     timingRef.current.speechEnd = performance.now();
                                 }
@@ -200,13 +267,15 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                                 setTranscript(data.text);
                                 const now = performance.now();
                                 timingRef.current.transcript = now;
-                                onTranscript?.(data.text);
+                                onTranscriptRef.current?.(data.text);
                             } else if (data.type === 'reply') {
                                 setReply(data.text);
                                 timingRef.current.firstSentence = performance.now();
-                                onReply?.(data.text, data);
+                                onReplyRef.current?.(data.text, data);
                             } else if (data.type === 'audio') {
                                 nextExpectedAudioSeqRef.current = data;
+                                setState('speaking');
+                                emitBrainState('speaking');
                             } else if (data.type === 'error') {
                                 setError(data.message);
                             }
@@ -225,7 +294,7 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                                 transcript: Math.round(t.transcript - t.speechEnd),
                                 firstSentence: Math.round(t.firstSentence - t.transcript),
                                 firstAudio: Math.round(t.firstAudio - t.firstSentence),
-                                total: Math.round(t.firstAudio - t.speechEnd)
+                                total: Math.round(t.firstAudio - t.speechEnd),
                             });
                         }
                         queueRef.current.push(event.data, queueRef.current.epoch);
@@ -233,8 +302,9 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                 };
 
                 ws.onerror = (err) => {
+                    if (epoch !== sessionEpochRef.current) return;
                     console.error('Voice WebSocket error:', err);
-                    setError('Voice WebSocket connection error. Please ensure the S.P.I.D.E.Y server is running.');
+                    setError('Voice WebSocket connection error. Please ensure the ORBIT server is running.');
                     cleanupAudioCapture();
                     setState('idle');
                     emitBrainAudioLevel(0);
@@ -242,19 +312,23 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                 };
 
                 ws.onclose = () => {
+                    if (epoch !== sessionEpochRef.current) return;
                     cleanupAudioCapture();
                     setState('idle');
                     emitBrainAudioLevel(0);
                     emitBrainState('idle');
                 };
             } catch (err) {
+                if (epoch !== sessionEpochRef.current) return;
                 console.error('Failed to initialize mic/voice session:', err);
                 setError(err.message || 'Microphone access denied or unavailable.');
                 cleanupAudioCapture();
                 setState('idle');
+                emitBrainAudioLevel(0);
+                emitBrainState('idle');
             }
         },
-        [cleanupAudioCapture, stopSession, onTranscript, onReply]
+        [cleanupAudioCapture, stopSession]
     );
 
     useEffect(() => {
@@ -283,13 +357,15 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
         reply,
         error,
         mode,
+        isMuted,
         timing,
         startSession,
         stopSession,
+        toggleMute,
         commitUtterance,
         interrupt,
         updateChatId,
-        isIdle: state === 'idle'
+        isIdle: state === 'idle',
+        isLiveActive: mode === 'live' && state !== 'idle',
     };
 }
-

@@ -674,6 +674,17 @@ def _handle_local_command(prompt: str, chat_id: str) -> tuple[str, str] | None:
             "local-scheduler",
         )
 
+    # Explicit learning queries (mentioning learn/study/roadmap/topic/lesson/code folder)
+    # run BEFORE task/habit/generic completion fallbacks so nothing can hijack them.
+    if re.search(
+        r"\b(?:learn\w*|stud(?:y|ying|ied)|roadmaps?|topics?|lessons?|modules?|code\s+folder|coding\s+folder|practice\s+folder|learning\s+links?|learning\s+nudges?)\b",
+        prompt,
+        re.IGNORECASE,
+    ):
+        early_learning = _app()._learning_command(prompt, name=name, chat_id=chat_id)
+        if early_learning is not None:
+            return early_learning
+
     task_request = _app()._parse_task_create(prompt)
     if task_request:
         raw_title, priority = task_request

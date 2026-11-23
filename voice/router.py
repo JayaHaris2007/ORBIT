@@ -218,6 +218,9 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
     speech_detected = False
     speech_start_time = 0.0
     silence_start_time = 0.0
+    pre_roll: list[bytes] = []  # Rolling ~500 ms pre-roll so silence never bloats PCM
+    max_pre_roll_chunks = 5
+    max_utterance_bytes = 16000 * 2 * 30  # Cap single utterance at 30 seconds (16kHz s16le)
 
     async def send_state(st: session.VState) -> None:
         voice_sess.state = st
@@ -305,22 +308,25 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
             await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
             return
 
+        spoken_source = chat_res.get("spoken_response") or reply_text
         await websocket.send_text(
             json.dumps(
                 {
                     "type": "reply",
                     "text": reply_text,
-                    "spoken_text": text_clean.summarize_for_speech(reply_text),
+                    "transcript": transcript,
+                    "spoken_text": text_clean.summarize_for_speech(spoken_source),
                     "chat_id": chat_res.get("chat_id") or chat_id,
                     "messages": chat_res.get("messages"),
                     "navigate": chat_res.get("navigate"),
+                    "provider": chat_res.get("provider"),
                     "ui_actions": chat_res.get("ui_actions"),
                 }
             )
         )
 
         # 3. Speak
-        await speak_sentences(reply_text)
+        await speak_sentences(spoken_source)
 
         # 4. Finish turn
         if mode == "live" and not voice_sess.cancel.is_set():
@@ -345,6 +351,7 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                     chat_id = payload.get("chat_id")
                     voice_sess.reset()
                     speech_detected = False
+                    pre_roll.clear()
                     await send_state(session.VState.LISTENING)
 
                 elif msg_type == "set_chat":
@@ -354,24 +361,28 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                     voice_sess.reset()
                     is_speaking = False
                     speech_detected = False
+                    pre_roll.clear()
                     await send_state(session.VState.IDLE)
 
                 elif msg_type == "commit":
                     if voice_sess.state == session.VState.LISTENING and len(voice_sess.pcm) >= 3200:
                         speech_detected = False
                         silence_start_time = 0.0
+                        pre_roll.clear()
                         voice_sess.state = session.VState.TRANSCRIBING
                         task = asyncio.create_task(process_utterance())
                         voice_sess.tasks.add(task)
                     else:
                         voice_sess.pcm.clear()
+                        pre_roll.clear()
                         speech_detected = False
-                        await send_state(session.VState.IDLE)
+                        await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
 
                 elif msg_type == "interrupt":
                     voice_sess.reset()
                     is_speaking = False
                     speech_detected = False
+                    pre_roll.clear()
                     await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
 
             elif "bytes" in msg:
@@ -386,6 +397,7 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                         is_speaking = False
                         speech_detected = True
                         speech_start_time = now
+                        pre_roll.clear()
                         voice_sess.pcm.extend(pcm_chunk)
                         await send_state(session.VState.LISTENING)
                     continue
@@ -393,18 +405,29 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                 if voice_sess.state != session.VState.LISTENING:
                     continue
 
-                voice_sess.pcm.extend(pcm_chunk)
-
-                # In push-to-talk mode, wait for explicit "commit" on key release
+                # In push-to-talk mode, capture continuously until explicit "commit"
                 if mode == "ptt":
+                    if len(voice_sess.pcm) < max_utterance_bytes:
+                        voice_sess.pcm.extend(pcm_chunk)
                     continue
 
                 if energy >= config.VAD_ENERGY_THRESHOLD:
                     if not speech_detected:
                         speech_detected = True
                         speech_start_time = now
+                        for prev_chunk in pre_roll:
+                            voice_sess.pcm.extend(prev_chunk)
+                        pre_roll.clear()
                     silence_start_time = 0.0
+                    voice_sess.pcm.extend(pcm_chunk)
+                    if len(voice_sess.pcm) >= max_utterance_bytes:
+                        speech_detected = False
+                        silence_start_time = 0.0
+                        voice_sess.state = session.VState.TRANSCRIBING
+                        task = asyncio.create_task(process_utterance())
+                        voice_sess.tasks.add(task)
                 elif speech_detected:
+                    voice_sess.pcm.extend(pcm_chunk)
                     if silence_start_time == 0.0:
                         silence_start_time = now
                     elif (now - silence_start_time) * 1000 >= config.VAD_TRAILING_SILENCE_MS:
@@ -419,6 +442,11 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
                             speech_detected = False
                             silence_start_time = 0.0
                             voice_sess.pcm.clear()
+                else:
+                    # Keep a small rolling pre-roll buffer while waiting for speech onset
+                    pre_roll.append(pcm_chunk)
+                    if len(pre_roll) > max_pre_roll_chunks:
+                        pre_roll.pop(0)
 
     except (WebSocketDisconnect, RuntimeError):
         pass

@@ -1,18 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, X } from 'lucide-react';
 
 const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, type = 'danger', confirmString }) => {
     const [inputValue, setInputValue] = useState('');
 
-    // Reset input when modal opens/closes
-    useEffect(() => {
-        if (!isOpen) {
-            setInputValue('');
-        }
-    }, [isOpen]);
+    const handleClose = () => {
+        setInputValue('');
+        onClose();
+    };
 
-    // Case-insensitive, whitespace-trimmed comparison for user convenience
     const isConfirmDisabled = Boolean(
         confirmString &&
         inputValue.trim().toLowerCase() !== confirmString.trim().toLowerCase()
@@ -22,78 +18,76 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, type = 
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4">
+            <div role="dialog" aria-modal="true" className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4">
                 <motion.div
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 4 }}
-                    transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                    className="glass-card relative w-full max-w-sm overflow-hidden border border-[#F2EFE9]/20 bg-[#141414] p-6"
+                    transition={{ duration: 0.16 }}
+                    className="ascii-frame relative w-full max-w-md bg-[#0A0908] p-6"
                 >
-                    <div className={`absolute top-0 left-0 h-[2px] w-full ${type === 'danger' ? 'bg-[#D95D24]' : 'bg-[#F2EFE9]'}`} />
+                    <div className="mb-4 flex items-center justify-between border-b border-[#F2EFE9]/12 pb-3 font-mono text-[10px] uppercase tracking-[0.16em]">
+                        <span className={type === 'danger' ? 'text-[#D95D24]' : 'text-[#F2EFE9]'}>
+                            {type === 'danger' ? '// confirm_destructive_action' : '// confirm_action'}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={handleClose}
+                            className="text-[#8E867D] hover:text-[#F2EFE9]"
+                        >
+                            [x]
+                        </button>
+                    </div>
 
-                    <button
-                        onClick={onClose}
-                        className="absolute top-4 right-4 text-textMuted hover:text-white transition-colors"
-                    >
-                        <X size={20} />
-                    </button>
+                    <h3 className="text-lg font-semibold tracking-wide text-[#F2EFE9]">{title}</h3>
+                    <p className="mt-2 font-mono text-xs leading-relaxed text-[#8E867D]">{message}</p>
 
-                    <div className="flex flex-col items-center text-center space-y-4">
-                        <div className={`p-4 rounded-full ${type === 'danger' ? 'bg-red-500/10 text-red-500' : 'bg-primary/10 text-primary'}`}>
-                            <AlertTriangle size={32} />
-                        </div>
-
-                        <div>
-                            <h3 className="text-xl font-bold text-white uppercase tracking-wide mb-2">{title}</h3>
-                            <p className="text-textMuted text-sm font-mono leading-relaxed mb-4">{message}</p>
-
-                            {confirmString && (
-                                <div className="mt-4">
-                                    <p className="text-[10px] uppercase font-bold text-textMuted mb-2">
-                                        Type <span className="text-white select-all">{confirmString}</span> to confirm
-                                    </p>
-                                    <input
-                                        type="text"
-                                        value={inputValue}
-                                        onChange={(e) => setInputValue(e.target.value)}
-                                        onKeyDown={async (e) => {
-                                            if (e.key === 'Enter' && !isConfirmDisabled) {
-                                                e.preventDefault();
-                                                await onConfirm();
-                                                onClose();
-                                            }
-                                        }}
-                                        autoFocus
-                                        className="w-full bg-black/30 border border-white/10 rounded px-3 py-2 text-center text-white text-sm font-mono focus:border-white/30 outline-none transition-colors"
-                                        placeholder={confirmString}
-                                    />
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="flex w-full gap-3 mt-4">
-                            <button
-                                onClick={onClose}
-                                className="flex-1 py-3 px-4 rounded-lg border border-white/10 text-textMuted hover:text-white hover:bg-white/5 transition-all uppercase text-xs font-bold tracking-wider"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    await onConfirm();
-                                    onClose();
+                    {confirmString && (
+                        <div className="mt-5 border border-[#F2EFE9]/12 bg-[#060606] p-3">
+                            <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#8E867D]">
+                                Type <span className="select-all text-[#D95D24]">{confirmString}</span> to confirm
+                            </p>
+                            <input
+                                type="text"
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                                onKeyDown={async (e) => {
+                                    if (e.key === 'Enter' && !isConfirmDisabled) {
+                                        e.preventDefault();
+                                        await onConfirm();
+                                        handleClose();
+                                    }
                                 }}
-                                disabled={isConfirmDisabled}
-                                className={`flex-1 py-3 px-4 rounded-lg text-white shadow-[0_0_15px_rgba(0,0,0,0.2)] transition-all uppercase text-xs font-bold tracking-wider ${isConfirmDisabled ? 'opacity-50 cursor-not-allowed bg-gray-700' :
-                                        type === 'danger'
-                                            ? 'bg-red-600 hover:bg-red-500'
-                                            : 'bg-primary hover:bg-violet-500'
-                                    }`}
-                            >
-                                Confirm
-                            </button>
+                                autoFocus
+                                className="w-full border border-[#F2EFE9]/18 bg-[#0C0B0A] px-3 py-2 font-mono text-xs text-[#F2EFE9] outline-none focus:border-[#D95D24]"
+                                placeholder={confirmString}
+                            />
                         </div>
+                    )}
+
+                    <div className="mt-6 flex gap-2.5 font-mono text-xs uppercase tracking-[0.14em]">
+                        <button
+                            type="button"
+                            onClick={handleClose}
+                            className="flex-1 border border-[#F2EFE9]/16 bg-[#060606] px-4 py-2.5 text-[#8E867D] hover:border-[#F2EFE9]/40 hover:text-[#F2EFE9]"
+                        >
+                            [cancel]
+                        </button>
+                        <button
+                            type="button"
+                            onClick={async () => {
+                                await onConfirm();
+                                handleClose();
+                            }}
+                            disabled={isConfirmDisabled}
+                            className={`flex-1 border px-4 py-2.5 font-semibold transition-colors ${
+                                isConfirmDisabled
+                                    ? 'cursor-not-allowed border-[#F2EFE9]/10 bg-[#151311] text-[#5C564F]'
+                                    : 'border-[#D95D24] bg-[#D95D24] text-[#060606] hover:bg-[#E86B30]'
+                            }`}
+                        >
+                            [confirm]
+                        </button>
                     </div>
                 </motion.div>
             </div>

@@ -2,23 +2,21 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useAppData } from '../context/AppDataContext';
 import { taskService } from '../services/taskService';
-import { Plus, Search } from 'lucide-react';
 import TaskCard from '../components/TaskCard';
 import TaskEditor from '../components/TaskEditor';
-
 import ConfirmationModal from '../components/ConfirmationModal';
+import { buildAsciiBar } from '../utils/asciiUtils';
 
 const Todos = () => {
     const { currentUser } = useAuth();
     const { revision } = useAppData();
     const [tasks, setTasks] = useState([]);
     const [editingTask, setEditingTask] = useState(null);
-    const [filter, setFilter] = useState('all'); // all, pending, completed
+    const [filter, setFilter] = useState('all');
     const [search, setSearch] = useState('');
 
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [taskToDelete, setTaskToDelete] = useState(null);
-
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -59,27 +57,27 @@ const Todos = () => {
                     filter === 'pending' ? !task.completed :
                         ['high', 'medium', 'low'].includes(filter) ? (!task.completed && task.priority === filter) :
                             !task.completed;
-
         const matchesSearch = String(task.title || '').toLowerCase().includes(search.toLowerCase());
-
         return matchesFilter && matchesSearch;
     });
 
-    // Sort by completed (bottom) then priority (high > medium > low)
-    const sortedTasks = filteredTasks.sort((a, b) => {
+    const sortedTasks = [...filteredTasks].sort((a, b) => {
         if (a.completed === b.completed) {
             const p = { high: 3, medium: 2, low: 1 };
-            return p[b.priority] - p[a.priority];
+            return (p[b.priority] || 0) - (p[a.priority] || 0);
         }
         return a.completed ? 1 : -1;
     });
+
+    const completedCount = tasks.filter((t) => t.completed).length;
+    const pct = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
 
     const handleToggleTask = async (taskId, status) => {
         try {
             await taskService.toggleTaskCompletion(taskId, status);
             setTasks(await taskService.getTasks(true));
         } catch (error) {
-            console.error("Error toggling task:", error);
+            console.error('Error toggling task:', error);
         }
     };
 
@@ -105,64 +103,68 @@ const Todos = () => {
                 console.error(error);
             }
         }
-    }
+    };
 
     if (loading) {
         return (
-            <div className="py-16 text-center font-mono text-xs uppercase tracking-[0.18em] text-[#9C968E] animate-pulse">
-                Loading your tasks...
+            <div className="py-16 text-center font-mono text-xs uppercase tracking-[0.18em] text-[#8E867D]">
+                // loading task queue...
             </div>
         );
     }
 
     return (
-        <div className="mx-auto max-w-6xl pb-20">
-            <div className="mb-8 flex flex-col items-start justify-between gap-4 border-b border-[#F2EFE9]/15 pb-5 md:flex-row md:items-end">
+        <div className="mx-auto max-w-6xl space-y-6 pb-12">
+            {/* ASCII Telemetry Header */}
+            <div className="flex flex-col justify-between gap-4 border-b border-[#F2EFE9]/14 pb-4 md:flex-row md:items-end">
                 <div>
-                    <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">03 · Execution</span>
-                    <h1 className="mt-1 text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9]">Your tasks</h1>
-                    <p className="mt-1 font-mono text-xs text-[#9C968E]">Keep the important things moving.</p>
+                    <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">
+                        01 // execution_queue
+                    </span>
+                    <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[#F2EFE9]">Tasks</h1>
                 </div>
-
-                <button
-                    onClick={() => setEditingTask(null)}
-                    className="flex items-center gap-2 border border-[#D95D24] bg-[#D95D24] px-4 py-2 font-mono text-xs font-bold uppercase tracking-[0.14em] text-[#111111] transition-colors hover:bg-[#C44E19]"
-                >
-                    <Plus size={16} />
-                    <span>New task</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-4 font-mono text-xs">
+                    <div className="border border-[#F2EFE9]/12 bg-[#0B0A09] px-3 py-1.5">
+                        <span className="text-[#8E867D]">DONE </span>
+                        <span className="text-[#D95D24]">[{buildAsciiBar(pct, 12)}]</span>
+                        <span className="ml-2 text-[#F2EFE9]">{completedCount}/{tasks.length}</span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setEditingTask(null)}
+                        className="border border-[#D95D24] bg-[#D95D24] px-3.5 py-1.5 font-semibold uppercase tracking-[0.12em] text-[#060606] hover:bg-[#E86B30]"
+                    >
+                        [+ new_task]
+                    </button>
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-                <div className="min-w-0">
-                    {/* Controls */}
-                    <div className="mb-6 flex max-w-2xl flex-col gap-3">
-                        <div className="relative w-full">
-                            <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#9C968E]" size={16} />
-                            <input
-                                type="text"
-                                placeholder="Search your tasks..."
-                                className="w-full border border-[#F2EFE9]/15 bg-[#151515] py-2.5 pl-10 pr-4 font-mono text-xs text-[#F2EFE9] placeholder:text-[#9C968E]/60 transition-colors focus:border-[#D95D24] focus:outline-none"
-                                value={search}
-                                onChange={(e) => setSearch(e.target.value)}
-                            />
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-1 border border-[#F2EFE9]/15 bg-[#151515] p-1">
+            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_330px]">
+                <div className="min-w-0 space-y-4">
+                    {/* Search + Filter Strip */}
+                    <div className="flex flex-col gap-2.5 sm:flex-row">
+                        <input
+                            type="text"
+                            placeholder="Filter tasks..."
+                            className="flex-1 border border-[#F2EFE9]/14 bg-[#0A0908] px-3.5 py-2 font-mono text-xs text-[#F2EFE9] placeholder:text-[#615A52] focus:border-[#D95D24] focus:outline-none"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                        />
+                        <div className="flex items-center gap-1 border border-[#F2EFE9]/14 bg-[#0A0908] p-1 font-mono text-[10px] uppercase tracking-[0.12em]">
                             {[
                                 { id: 'all', label: 'All' },
-                                { id: 'pending', label: 'Pending' },
-                                { id: 'completed', label: 'Completed' },
-                                { id: 'high', label: 'High Priority' },
+                                { id: 'pending', label: 'Open' },
+                                { id: 'completed', label: 'Done' },
+                                { id: 'high', label: 'High' },
                             ].map((opt) => (
                                 <button
                                     key={opt.id}
                                     type="button"
                                     onClick={() => setFilter(opt.id)}
-                                    className={`flex-1 whitespace-nowrap px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.14em] transition-colors ${
+                                    className={`px-2.5 py-1.5 transition-colors ${
                                         filter === opt.id
-                                            ? 'bg-[#D95D24] text-[#111111]'
-                                            : 'text-[#9C968E] hover:bg-[#1D1D1D] hover:text-[#F2EFE9]'
+                                            ? 'bg-[#D95D24] font-semibold text-[#060606]'
+                                            : 'text-[#8E867D] hover:text-[#F2EFE9]'
                                     }`}
                                 >
                                     {opt.label}
@@ -171,12 +173,9 @@ const Todos = () => {
                         </div>
                     </div>
 
-                    {/* Task List — fixed-proportion cards that never stretch awkwardly on wide screens */}
-                    <div
-                        data-spidey-section="tasks"
-                        className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(270px,360px))]"
-                    >
-                        {sortedTasks.map(task => (
+                    {/* Task Cards */}
+                    <div data-spidey-section="tasks" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {sortedTasks.map((task) => (
                             <TaskCard
                                 key={task.id}
                                 task={task}
@@ -190,16 +189,17 @@ const Todos = () => {
                         ))}
 
                         {sortedTasks.length === 0 && (
-                            <div className="col-span-full max-w-2xl border border-[#F2EFE9]/14 bg-[#151515] py-16 text-center font-mono text-xs uppercase tracking-[0.14em] text-[#9C968E]">
-                                Nothing here yet. You&apos;re doing great.
+                            <div className="col-span-full border border-[#F2EFE9]/12 bg-[#0A0908] py-14 text-center font-mono text-xs uppercase tracking-[0.14em] text-[#7D756C]">
+                                // queue empty — all clear
                             </div>
                         )}
                     </div>
                 </div>
 
-                {/* Task editor, docked on the right of the page */}
-                <div className="2xl:sticky 2xl:top-6">
+                {/* Docked Task Editor */}
+                <div className="lg:sticky lg:top-4">
                     <TaskEditor
+                        key={editingTask?.id || 'new'}
                         task={editingTask}
                         onSave={handleSaveTask}
                         onCancel={() => setEditingTask(null)}
@@ -207,13 +207,12 @@ const Todos = () => {
                 </div>
             </div>
 
-            {/* Confirmation Modal */}
             <ConfirmationModal
                 isOpen={isDeleteModalOpen}
                 onClose={() => setIsDeleteModalOpen(false)}
                 onConfirm={confirmDeleteTask}
                 title="Delete this task?"
-                message="This task will be removed from your list."
+                message="This task will be permanently removed from your queue."
             />
         </div>
     );

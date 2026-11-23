@@ -240,7 +240,7 @@ def _humanize_checkin_with_llm(
             else "Do NOT call them 'buddy' or 'friend' — just talk naturally like someone you text every day."
         )
         system_msg = (
-            "You are S.P.I.D.E.Y., texting your close friend casually. "
+            "You are ORBIT, texting your close friend casually. "
             "Write ONE fresh, natural message (1-2 short sentences, max 40 words). "
             "Vary your openings, rhythm, and tone every time — NEVER use a formulaic 'Hey buddy, remember...' opener. "
             "Rules: plain conversational English with contractions; NO bullet lists, NO headings, "

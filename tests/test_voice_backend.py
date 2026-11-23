@@ -46,6 +46,19 @@ def test_text_cleaner_think_block():
     assert "The capital of France is Paris." in cleaned
 
 
+def test_text_cleaner_strips_file_extensions():
+    raw = (
+        "Hey, I noticed you already coded Control Flow in C++ with DSA "
+        "(while_loop.cpp, if_else.cpp) — want me to mark it completed so we can roll into Functions?"
+    )
+    cleaned = text_clean.clean_text_for_speech(raw)
+    assert "while loop" in cleaned
+    assert "if else" in cleaned
+    assert "cpp" not in cleaned.lower()
+    assert "dot" not in cleaned.lower()
+    assert "C plus plus" in cleaned
+
+
 def test_text_cleaner_tables():
     raw = (
         "| Name | Age |\n"

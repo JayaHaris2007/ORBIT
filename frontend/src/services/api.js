@@ -47,7 +47,7 @@ export const apiRequest = async (path, options = {}) => {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-        throw new Error(payload.detail || payload.error || `S.P.I.D.E.Y request failed (${response.status}).`);
+        throw new Error(payload.detail || payload.error || `ORBIT request failed (${response.status}).`);
     }
     return payload;
 };

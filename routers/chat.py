@@ -106,7 +106,7 @@ async def generate(payload: dict[str, Any] = Body(...)):
             ui_actions = []
 
         a.memory_store.add_message(chat_id, "assistant", response)
-        nav_page = next((act.get("page") for act in ui_actions if act.get("type") == "navigate"), None)
+        nav_page = next((act.get("page") for act in reversed(ui_actions) if act.get("type") == "navigate"), None)
         return {
             "response": response,
             "spoken_response": summarize_for_speech(response),
@@ -222,7 +222,7 @@ async def generate_stream(payload: dict[str, Any] = Body(...)):
 
                 await queue.put({"type": "stream_done"})
                 a.memory_store.add_message(chat_id, "assistant", response)
-                nav_page = next((act.get("page") for act in ui_actions if act.get("type") == "navigate"), None)
+                nav_page = next((act.get("page") for act in reversed(ui_actions) if act.get("type") == "navigate"), None)
                 await queue.put({
                     "type": "done",
                     "response": response,

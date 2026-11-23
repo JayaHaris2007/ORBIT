@@ -24,8 +24,16 @@ _LEARNING_PROGRESS_PATTERN = re.compile(
 
 _LEARNING_NEXT_PATTERN = re.compile(
     r"^what(?:\s+should|\s+can|\s+do|\s+could|\s+shall)?\s+i\s+(?:learn|study|tackle|practice|master)\s+next$"
-    r"|^what(?:'s| is)\s+next\s+(?:to\s+|in\s+my\s+)?(?:learn|learning|study|studying)$"
-    r"|^(?:what(?:'s| is)\s+)?(?:my\s+|the\s+)?next\s+(?:learning\s+)?(?:topic|lesson|module|subject)s?(?:\s+to\s+(?:learn|study))?$"
+    r"|^what(?:'s| is)\s+next\s+(?:to\s+|in\s+(?:my\s+)?)?(?:learn|learning|study|studying)$"
+    r"|^(?:(?:show|list|view|check|tell|give)\s+(?:me\s+)?)?"
+    r"(?:what(?:'s| is| are)\s+)?(?:my\s+|the\s+|all\s+)?"
+    r"(?:(?:pending|remaining|left|unfinished|incomplete|open|next)\s+)+"
+    r"(?:(?:learning|study)\s+)?(?:(?:topics?|lessons?|modules?|subjects?|items?|things?)\s+)?"
+    r"(?:to\s+(?:learn|study)|(?:in\s+(?:my\s+)?)?(?:learning|study(?:ing)?))(?:\s+next)?$"
+    r"|^(?:(?:show|list|view|check|tell|give)\s+(?:me\s+)?)?"
+    r"(?:what(?:'s| is| are)\s+)?(?:my\s+|the\s+)?next\s+"
+    r"(?:(?:learning|study)\s+)?(?:topics?|lessons?|modules?|subjects?|in\s+learning|to\s+(?:learn|study))(?:\s+to\s+(?:learn|study))?$"
+    r"|^what(?:\s+do\s+i\s+have|\s+is|\s*'s|\s+are)?\s+(?:pending|left|remaining|unfinished)\s+to\s+(?:learn|study)(?:\s+next)?$"
     r"|^(?:suggest|recommend)(?:\s+me)?\s+(?:a\s+|some\s+)?(?:learning\s+)?(?:topics?|something\s+to\s+(?:learn|study))(?:\s+next)?$",
     re.IGNORECASE,
 )
@@ -51,11 +59,11 @@ _LEARNING_ROADMAP_TOPICS_PATTERN = re.compile(
 _LEARNING_STATUS_LIST_PATTERN = re.compile(
     r"^what\s+(?:topics?\s+)?am\s+i\s+(?:currently\s+)?(?:learning|studying)(?:\s+right\s+now|\s+now)?$"
     r"|^(?:(?:show|list|view|check|what\s+are)\s+(?:me\s+)?)?(?:(?:my|the|all)\s+)*"
-    r"(?P<filter>in[\s\-]progress|active|current|currently\s+learning|completed|finished|learned|mastered|on[\s\-]hold|paused|not\s+started|unlocked)\s+"
-    r"(?:learning\s+)?topics?$"
+    r"(?P<filter>in[\s\-]progress|active|current|currently\s+learning|completed|finished|learned|mastered|on[\s\-]hold|paused|not\s+started|unlocked|pending|remaining|unfinished|incomplete)\s+"
+    r"(?:learning\s+)?(?:topics?|lessons?|modules?)$"
     r"|^(?:(?:show|list|view|check|what\s+are)\s+(?:me\s+)?)?(?:(?:my|the|all)\s+)*"
-    r"(?:learning\s+)?topics?\s+(?:that\s+are\s+|which\s+are\s+|i\s+have\s+|i've\s+)?"
-    r"(?P<filter2>in\s+progress|currently\s+learning|completed|finished|learned|mastered|on\s+hold|paused|not\s+started)$"
+    r"(?:learning\s+)?(?:topics?|lessons?|modules?)\s+(?:that\s+are\s+|which\s+are\s+|i\s+have\s+|i've\s+)?"
+    r"(?P<filter2>in\s+progress|currently\s+learning|completed|finished|learned|mastered|on\s+hold|paused|not\s+started|pending|remaining|unfinished|incomplete)$"
     r"|^what\s+(?:topics?\s+)?have\s+i\s+(?P<filter3>learned|completed|mastered|finished)(?:\s+so\s+far)?$",
     re.IGNORECASE,
 )
@@ -456,6 +464,22 @@ def _learning_status_topics_reply(raw_filter: str) -> tuple[str, str]:
         status = "on_hold"
         label = "on hold"
         empty_msg = "You don't have any learning topics on hold."
+    elif norm in {"pending", "remaining", "unfinished", "incomplete"}:
+        in_prog = learning_progress.list_topics(status="learning")
+        not_started = learning_progress.list_topics(status="not_started")
+        items = in_prog + not_started
+        if not items:
+            return ("You're all caught up — every learning topic is already completed!", "local-learning")
+        lines = [
+            f"- **{item['name']}** ({item['roadmap_name']})"
+            + (" — in progress" if item["status"] == "learning" else "")
+            for item in items[:12]
+        ]
+        return (
+            f"Here are your **pending** learning topics ({len(items)}):\n"
+            + "\n".join(lines),
+            "local-learning",
+        )
     else:
         status = "not_started"
         label = "not started"

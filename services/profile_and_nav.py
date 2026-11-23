@@ -15,7 +15,7 @@ def _app():
 _IDENTITY_QUESTION_PATTERNS = (
     re.compile(
         r"\bwho\s+(?:built|builed|builded|build|made|created|developed|"
-        r"designed|coded|programmed)\s+(?:you|spidey|s\.p\.i\.d\.e\.y)\b",
+        r"designed|coded|programmed)\s+(?:you|orbit|spidey|s\.p\.i\.d\.e\.y)\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -24,21 +24,21 @@ _IDENTITY_QUESTION_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"\bwho\s+(?:is|are)\s+behind\s+(?:you|spidey|s\.p\.i\.d\.e\.y)\b",
+        r"\bwho\s+(?:is|are)\s+behind\s+(?:you|orbit|spidey|s\.p\.i\.d\.e\.y)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:how|why)\s+(?:is|was|are|were)\s+(?:you|spidey|s\.p\.i\.d\.e\.y)\s+"
+        r"\b(?:how|why)\s+(?:is|was|are|were)\s+(?:you|orbit|spidey|s\.p\.i\.d\.e\.y)\s+"
         r"(?:built|made|created|developed|designed)\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"\b(?:how|why)\s+(?:is|was|are|were)\s+(?:built|made|created)\s+"
-        r"(?:you|spidey|s\.p\.i\.d\.e\.y)\b",
+        r"(?:you|orbit|spidey|s\.p\.i\.d\.e\.y)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:how|why)\s+(?:you|spidey|s\.p\.i\.d\.e\.y)\s+(?:are|were|is|was)\s+"
+        r"\b(?:how|why)\s+(?:you|orbit|spidey|s\.p\.i\.d\.e\.y)\s+(?:are|were|is|was)\s+"
         r"(?:built|made|created)\b",
         re.IGNORECASE,
     ),
@@ -56,7 +56,7 @@ _BUILDER_LOOSE_PATTERN = re.compile(
 )
 
 _ASSISTANT_REFERENCE_PATTERN = re.compile(
-    r"\b(?:you|your|spidey|s\.p\.i\.d\.e\.y|assistant)\b", re.IGNORECASE
+    r"\b(?:you|your|orbit|spidey|s\.p\.i\.d\.e\.y|assistant)\b", re.IGNORECASE
 )
 
 
@@ -311,11 +311,26 @@ def _profile_buckets(facts: list[dict[str, Any]]) -> dict[str, list[str]]:
     return buckets
 
 
+_NON_PROFILE_DOMAIN_GUARD = re.compile(
+    r"\b(?:"
+    r"tasks?|to[\s-]?dos?|habits?|streaks?|reminders?|remind|"
+    r"roadmaps?|topics?|lessons?|modules?|learning|learn|"
+    r"pending|remaining|left\s+to|next|unfinished|completed|done|"
+    r"settings?|analytics?|stats?|telemetry|progress|briefing|"
+    r"to\s+study|study\s+(?:plan|next|log|history|topics?)|studying\s+(?:right\s+now|now)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def _profile_topic(normalized: str) -> str | None:
     """Return the profile section a direct question like "what are my skills" asks about."""
     if not re.search(r"\b(?:my|i|me|mine)\b", normalized):
         return None
     if not _PROFILE_QUESTION_LEAD.match(normalized):
+        return None
+    # Never hijack actionable Tasks, Habits, Reminders, Learning, Analytics, or Settings queries.
+    if _NON_PROFILE_DOMAIN_GUARD.search(normalized):
         return None
     for label, words in _PROFILE_TOPIC_WORDS:
         if any(re.search(rf"\b{re.escape(word)}\b", normalized) for word in words):
@@ -396,7 +411,7 @@ def _memories_for_prompt(prompt: str) -> list[dict[str, Any]]:
 
 _GREETING_PATTERN = re.compile(
     r"(?:hi|hello|hey|yo|hiya|good\s+(?:morning|afternoon|evening))"
-    r"[\s!.,]*(?:spidey|s\.p\.i\.d\.e\.y)?[\s!.,]*",
+    r"[\s!.,]*(?:orbit|spidey|s\.p\.i\.d\.e\.y)?[\s!.,]*",
     re.IGNORECASE,
 )
 
@@ -414,18 +429,18 @@ def _greeting_answer(prompt: str) -> str | None:
     name = _user_name(_user_fact_memories())
     salutation = f"Hey {name.split()[0]}!" if name else "Hey!"
     return (
-        f"{salutation} I'm S.P.I.D.E.Y. Ask me about your tasks, habits, "
+        f"{salutation} I'm ORBIT. Ask me about your tasks, habits, "
         "reminders, learning progress, or anything you've saved."
     )
 
 
 def _assistant_intro_answer(prompt: str) -> str | None:
-    """Introduce S.P.I.D.E.Y without asking the small model to guess its name."""
+    """Introduce ORBIT without asking the small model to guess its name."""
     normalized = _app()._normalize_command(prompt)
     if not _ASSISTANT_INTRO_PATTERN.fullmatch(normalized):
         return None
     return (
-        "I'm S.P.I.D.E.Y, your local assistant. I manage tasks, habits, and "
+        "I'm ORBIT, your local assistant. I manage tasks, habits, and "
         "reminders, remember what you tell me, and answer questions — all on "
         "your own machine."
     )
@@ -458,30 +473,42 @@ def _route_for_page(page: str) -> str:
 _PAGE_ALIASES = {
     "tasks": ("task", "tasks", "todo", "todos", "to-do", "to-dos", "to do", "to dos"),
     "habits": ("habit", "habits"),
-    "reminders": ("reminder", "reminders"),
+    "reminders": ("reminder", "reminders", "reminders and memory", "recall"),
     "dashboard": ("dashboard", "home", "overview"),
     "chat": ("chat", "assistant"),
     "research": ("research", "web research"),
     "memories": ("memory", "memories", "notes"),
-    "learning": ("learning", "learning tracker", "roadmap", "roadmaps"),
-    "settings": ("settings",),
+    "learning": ("learning", "learning tracker", "roadmap", "roadmaps", "study", "study plan"),
+    "analytics": ("analytics", "stats", "telemetry", "progress"),
+    "settings": ("settings", "setting", "preferences", "config", "configuration"),
 }
 
 _NAVIGATE_PATTERN = re.compile(
     r"^(?:(?:go|move|switch|navigate|jump|head)\s+(?:over\s+)?(?:to|into)"
-    r"|goto|take\s+me\s+(?:to|into)|open|bring\s+up)"
+    r"|goto|take\s+me\s+(?:to|into)|open|bring\s+up|show(?:\s+me)?)"
     r"\s+(?:the\s+|my\s+)?(?P<target>[a-z\- ]+?)"
-    r"(?:\s+(?:page|section|tab|screen|view|area))?$",
+    r"(?:\s+(?:page|section|tab|screen|view|area|popup|pop-up|panel))?$",
     re.IGNORECASE,
 )
 
 
 def _parse_navigation(prompt: str) -> str | None:
-    """Return a page key for 'go to tasks' style commands, else None."""
-    match = _NAVIGATE_PATTERN.match(_app()._normalize_command(prompt))
+    """Return a page key for 'open learning' / 'go to tasks' style commands, else None."""
+    normalized = _app()._normalize_command(prompt)
+    match = _NAVIGATE_PATTERN.match(normalized)
     if not match:
         return None
     target = re.sub(r"\s+", " ", match.group("target").strip().lower())
+    # Keep "show my tasks / habits / reminders / memories / notes / learning" routed to
+    # their rich list handlers so the user gets actual data instead of just "Opening ...".
+    if normalized.lower().startswith("show") and target in {
+        "task", "tasks", "todo", "todos", "to-do", "to-dos", "to do", "to dos",
+        "habit", "habits",
+        "reminder", "reminders",
+        "memory", "memories", "notes",
+        "learning", "roadmap", "roadmaps", "learning tracker", "study plan",
+    }:
+        return None
     for page, words in _PAGE_ALIASES.items():
         if target in words:
             return page

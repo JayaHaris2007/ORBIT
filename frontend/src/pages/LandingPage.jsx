@@ -23,9 +23,9 @@ const LandingPage = () => {
             <nav className="fixed top-0 w-full z-50 bg-black/50 backdrop-blur-lg border-b border-white/10">
                 <div className="max-w-7xl mx-auto px-4 md:px-6 h-20 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <img src="/logo.png" alt="Logo" className="w-8 h-8 rounded-full" />
-                        <span className="text-xl font-bold tracking-wider sm:hidden">S.P.I.D.E.Y</span>
-                        <span className="text-xl font-bold tracking-wider hidden sm:block">S.P.I.D.E.Y - A calmer way to grow</span>
+                        <img src="/logo.png" alt="ORBIT Logo" className="w-8 h-8 rounded-full" />
+                        <span className="text-xl font-bold tracking-wider sm:hidden">ORBIT</span>
+                        <span className="text-xl font-bold tracking-wider hidden sm:block">ORBIT - A calmer way to grow</span>
                     </div>
                     <div className="flex items-center gap-2 md:gap-4">
                         <Link to="/login" className="text-sm font-medium text-textMuted hover:text-white transition-colors whitespace-nowrap">
@@ -130,7 +130,7 @@ const LandingPage = () => {
 
             {/* Footer */}
             <footer className="py-10 border-t border-white/10 text-center text-textMuted text-sm">
-                <p>&copy; {new Date().getFullYear()} S.P.I.D.E.Y. All rights reserved.</p>
+                <p>&copy; {new Date().getFullYear()} ORBIT. All rights reserved.</p>
             </footer>
         </div>
     );

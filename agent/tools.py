@@ -180,6 +180,7 @@ def _exec_create_reminder(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
             title=title, when=when, recurrence=recurrence, chat_id=ctx.chat_id
         )
         ctx.ui_actions.append({"type": "refresh", "sections": ["reminders"]})
+        ctx.ui_actions.append({"type": "navigate", "page": "reminders", "route": "/reminders"})
         return {
             "status": "ok",
             "reminder": {
@@ -195,6 +196,7 @@ def _exec_create_reminder(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 
 def _exec_list_reminders(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     rows = ctx.deps.live_reminders()[:15]
+    ctx.ui_actions.append({"type": "navigate", "page": "reminders", "route": "/reminders"})
     return {
         "status": "ok",
         "reminders": [
@@ -241,6 +243,7 @@ def _exec_update_reminder(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
     _schedule_reminder(updated)
 
     ctx.ui_actions.append({"type": "refresh", "sections": ["reminders"]})
+    ctx.ui_actions.append({"type": "navigate", "page": "reminders", "route": "/reminders"})
     return {
         "status": "ok",
         "reminder": {
@@ -312,6 +315,7 @@ def _exec_create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     ctx.deps.run_learning_hook(lambda: ctx.deps.suggest_learning_for_task(task["id"]))
 
     ctx.ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
+    ctx.ui_actions.append({"type": "navigate", "page": "todos", "route": "/todos"})
     return {
         "status": "ok",
         "task": {
@@ -337,6 +341,7 @@ def _exec_list_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         filtered = all_tasks
 
     capped = filtered[:15]
+    ctx.ui_actions.append({"type": "navigate", "page": "todos", "route": "/todos"})
     return {
         "status": "ok",
         "tasks": [
@@ -382,6 +387,7 @@ def _exec_update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "completed": bool(u.get("completed")),
             })
         ctx.ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
+        ctx.ui_actions.append({"type": "navigate", "page": "todos", "route": "/todos"})
         return {"status": "ok", "tasks": updated_list, "count": len(updated_list)}
 
     item, err = resolve_entity(task_ref, tasks, title_key="title", entity_name="task")
@@ -404,6 +410,7 @@ def _exec_update_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             pass
 
     ctx.ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
+    ctx.ui_actions.append({"type": "navigate", "page": "todos", "route": "/todos"})
     return {
         "status": "ok",
         "task": {
@@ -452,6 +459,7 @@ def _exec_create_habit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 
     habit = ctx.deps.memory_store.create_habit(name=name, daily_goal=daily_goal)
     ctx.ui_actions.append({"type": "refresh", "sections": ["habits", "gamification"]})
+    ctx.ui_actions.append({"type": "navigate", "page": "habits", "route": "/habits"})
     return {
         "status": "ok",
         "habit": {
@@ -466,6 +474,7 @@ def _exec_create_habit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 def _exec_list_habits(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     habits = ctx.deps.memory_store.list_habits()[:15]
     today = datetime.now(ctx.deps.local_timezone).date().isoformat()
+    ctx.ui_actions.append({"type": "navigate", "page": "habits", "route": "/habits"})
     return {
         "status": "ok",
         "habits": [
@@ -501,6 +510,7 @@ def _exec_complete_habit(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 "date": date_str,
             })
         ctx.ui_actions.append({"type": "refresh", "sections": ["habits", "gamification"]})
+        ctx.ui_actions.append({"type": "navigate", "page": "habits", "route": "/habits"})
         return {"status": "ok", "habits": updated_list, "count": len(updated_list)}
 
     item, err = resolve_entity(habit_ref, habits, title_key="name", entity_name="habit")
@@ -509,6 +519,7 @@ def _exec_complete_habit(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
     updated = ctx.deps.memory_store.set_habit_completion(item["id"], date_str, completed)
     ctx.ui_actions.append({"type": "refresh", "sections": ["habits", "gamification"]})
+    ctx.ui_actions.append({"type": "navigate", "page": "habits", "route": "/habits"})
     return {
         "status": "ok",
         "habit": {
@@ -549,6 +560,7 @@ def _exec_save_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     try:
         mem = ctx.deps.memory_store.add_memory(content)
         ctx.ui_actions.append({"type": "refresh", "sections": ["memories"]})
+        ctx.ui_actions.append({"type": "navigate", "page": "reminders", "route": "/reminders"})
         return {
             "status": "ok",
             "memory": {
@@ -575,6 +587,7 @@ def _exec_search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         return {"status": "error", "message": "'query' is required."}
 
     results = ctx.deps.memory_store.search_memories(query, limit=5)
+    ctx.ui_actions.append({"type": "navigate", "page": "reminders", "route": "/reminders"})
     return {
         "status": "ok",
         "results": [
@@ -704,6 +717,7 @@ def _exec_create_learning_roadmap(args: dict[str, Any], ctx: ToolContext) -> dic
     try:
         rm = progress.create_roadmap(name=name, category=category, description=description)
         ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+        ctx.ui_actions.append({"type": "navigate", "page": "learning", "route": "/learning"})
         return {
             "status": "ok",
             "roadmap": {
@@ -866,6 +880,7 @@ def _exec_create_learning_topic(args: dict[str, Any], ctx: ToolContext) -> dict[
             priority=prio,
         )
         ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+        ctx.ui_actions.append({"type": "navigate", "page": "learning", "route": "/learning"})
         return {
             "status": "ok",
             "topic": {
@@ -939,6 +954,7 @@ def _exec_complete_learning_topic(args: dict[str, Any], ctx: ToolContext) -> dic
             xp_awarded = 25
 
         ctx.ui_actions.append({"type": "refresh", "sections": ["learning", "gamification"]})
+        ctx.ui_actions.append({"type": "navigate", "page": "learning", "route": "/learning"})
         return {
             "status": "ok",
             "topic": {
@@ -1098,6 +1114,7 @@ def _exec_sync_learning_folder(args: dict[str, Any], ctx: ToolContext) -> dict[s
             "message": "No learning folders are linked yet. Tell me a folder path and roadmap to link.",
         }
     ctx.ui_actions.append({"type": "refresh", "sections": ["learning"]})
+    ctx.ui_actions.append({"type": "navigate", "page": "learning", "route": "/learning"})
     return {
         "status": "ok",
         "synced": [
@@ -1135,6 +1152,7 @@ def _exec_search_learning_code(args: dict[str, Any], ctx: ToolContext) -> dict[s
         limit=4,
         embed=getattr(ctx.deps.memory_store, "embed", None),
     )
+    ctx.ui_actions.append({"type": "navigate", "page": "learning", "route": "/learning"})
     return {
         "status": "ok",
         "query": query,
@@ -1256,6 +1274,7 @@ def _exec_batch_update_tasks(args: dict[str, Any], ctx: ToolContext) -> dict[str
             updated_count += 1
 
     ctx.ui_actions.append({"type": "refresh", "sections": ["tasks", "gamification"]})
+    ctx.ui_actions.append({"type": "navigate", "page": "todos", "route": "/todos"})
     return {
         "status": "ok",
         "action": action,

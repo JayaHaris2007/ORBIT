@@ -111,6 +111,7 @@ export class AudioQueue {
     stop() {
         this.epoch++;
         this.queue = [];
+        this.lastEndedAt = 0;
         try {
             this.playing?.stop();
         } catch { /* ignore */ }
@@ -164,9 +165,19 @@ export async function stopVoiceTurn(sessionId = 'default') {
     });
 }
 
+const CLIENT_FILE_EXT_RE = /\b([A-Za-z0-9][A-Za-z0-9_-]*)\.(?:cpp|hpp|cc|cxx|hh|c|h|py|pyw|ipynb|js|jsx|mjs|cjs|ts|tsx|java|kt|kts|go|rs|rb|php|cs|swift|dart|scala|lua|sql|json|yaml|yml|toml|xml|ini|cfg|md|txt|csv|tsv|html|htm|css|scss|sass|less|sh|bash|bat|cmd|ps1|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|svg|ico|mp3|wav|ogg|mp4|webm|zip|tar|gz|db|sqlite3?|glb|gltf)\b(?![(\w])/gi;
+
+function stripFileExtensionsForSpeech(text) {
+    return String(text || '').replace(CLIENT_FILE_EXT_RE, (_, base) =>
+        base.replace(/[_-]+/g, ' ')
+    );
+}
+
 export function summarizeForSpeechClient(text, maxItems = 4, maxProseChars = 260) {
     if (!text || !text.trim()) return '';
-    const withoutThink = text.replace(/<think>[\s\S]*?<\/think>/gi, ' ').trim();
+    const withoutThink = stripFileExtensionsForSpeech(
+        text.replace(/<think>[\s\S]*?<\/think>/gi, ' ').trim()
+    );
     const hasCodeBlock = /```[\s\S]*?```/.test(withoutThink);
     const withoutCode = withoutThink.replace(/```[\s\S]*?```/g, ' ').trim();
     const rawLines = withoutCode.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);

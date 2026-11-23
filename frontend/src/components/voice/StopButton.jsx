@@ -1,5 +1,3 @@
-import { Square } from 'lucide-react';
-
 export default function StopButton({ state = 'idle', onStop }) {
     if (state === 'idle') return null;
 
@@ -8,10 +6,10 @@ export default function StopButton({ state = 'idle', onStop }) {
             type="button"
             onClick={onStop}
             aria-label="Stop current voice turn"
-            title="Stop voice turn (discard transient audio)"
-            className="flex h-9 w-9 items-center justify-center border border-[#D95D24] bg-[#D95D24] text-[#111111] transition-colors hover:bg-[#C44E19]"
+            title="Stop voice turn"
+            className="flex h-9 shrink-0 items-center justify-center border border-[#D95D24] bg-[#D95D24] px-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-[#060606] transition-colors hover:bg-[#E86B30]"
         >
-            <Square size={13} className="fill-current" />
+            [stop]
         </button>
     );
 }

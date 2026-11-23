@@ -1,13 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { FolderCode, Check, X, RefreshCw, Loader2, FileCode2 } from 'lucide-react';
 import { learningService } from '../../services/learningService';
 import { useAppData } from '../../context/AppDataContext';
 
-/**
- * Review queue for code-based topic completion suggestions detected by S.P.I.D.E.Y.'s
- * local folder analyzer & Hybrid Code RAG engine.
- */
 const CodeSuggestions = ({ onChanged, hasLinkedFolders = false }) => {
     const { revision } = useAppData();
     const [suggestions, setSuggestions] = useState([]);
@@ -16,23 +10,26 @@ const CodeSuggestions = ({ onChanged, hasLinkedFolders = false }) => {
     const [busyId, setBusyId] = useState(null);
     const [error, setError] = useState('');
 
-    const load = useCallback(async () => {
-        try {
-            setError('');
-            const items = await learningService.listCodeSuggestions();
-            setSuggestions(items);
-        } catch (err) {
-            setError(err.message || 'Could not load code progress suggestions.');
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
     useEffect(() => {
-        load();
-    }, [load, revision]);
+        let cancelled = false;
+        learningService.listCodeSuggestions()
+            .then((items) => {
+                if (!cancelled) {
+                    setSuggestions(items);
+                    setError('');
+                    setLoading(false);
+                }
+            })
+            .catch((err) => {
+                if (!cancelled) {
+                    setError(err.message || 'Could not load code suggestions.');
+                    setLoading(false);
+                }
+            });
+        return () => { cancelled = true; };
+    }, [revision]);
 
-    const handleSyncAll = async () => {
+    const handleSyncAll = useCallback(async () => {
         setSyncing(true);
         setError('');
         try {
@@ -40,11 +37,11 @@ const CodeSuggestions = ({ onChanged, hasLinkedFolders = false }) => {
             setSuggestions(res.suggestions ?? []);
             onChanged?.();
         } catch (err) {
-            setError(err.message || 'Could not sync linked folders.');
+            setError(err.message || 'Could not sync folders.');
         } finally {
             setSyncing(false);
         }
-    };
+    }, [onChanged]);
 
     const handleResolve = async (item, state) => {
         setBusyId(item.id);
@@ -60,110 +57,72 @@ const CodeSuggestions = ({ onChanged, hasLinkedFolders = false }) => {
         }
     };
 
-    if (!loading && !hasLinkedFolders && suggestions.length === 0) {
+    if (loading || (!hasLinkedFolders && suggestions.length === 0)) {
         return null;
     }
 
-    return (
-        <section className="space-y-4">
-            <div className="flex items-center justify-between gap-2 text-white/80">
-                <div className="flex items-center gap-2">
-                    <FolderCode size={18} className="text-orange-400" />
-                    <h2 className="text-lg font-semibold uppercase tracking-widest">Code folder completions</h2>
-                    {!loading && suggestions.length > 0 && (
-                        <span className="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-400/20">
-                            {suggestions.length} ready to confirm
-                        </span>
-                    )}
-                </div>
+    if (suggestions.length === 0) {
+        return (
+            <div className="flex items-center justify-between border border-[#F2EFE9]/10 bg-[#0B0A09] px-4 py-3 font-mono text-xs text-[#7D756C]">
+                <span>Linked code folders are synced.</span>
                 <button
                     type="button"
                     onClick={handleSyncAll}
-                    disabled={syncing || loading}
-                    className="flex items-center gap-1.5 border border-white/15 bg-white/5 px-2.5 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-textMuted transition-colors hover:border-orange-400/50 hover:text-white disabled:opacity-50"
-                    title="Scan linked learning code folders for progress"
+                    disabled={syncing}
+                    className="border border-[#F2EFE9]/14 px-2.5 py-1 text-[11px] text-[#A8A096] hover:border-[#D95D24] hover:text-[#F2EFE9]"
                 >
-                    <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
-                    <span>{syncing ? 'Analyzing…' : 'Sync folders'}</span>
+                    {syncing ? 'Syncing…' : 'Sync now'}
+                </button>
+            </div>
+        );
+    }
+
+    return (
+        <section className="space-y-3">
+            <div className="flex items-center justify-between font-mono text-xs">
+                <span className="text-[#D95D24]">Code folder completions ({suggestions.length})</span>
+                <button
+                    type="button"
+                    onClick={handleSyncAll}
+                    disabled={syncing}
+                    className="text-[11px] text-[#8E867D] hover:text-[#F2EFE9]"
+                >
+                    {syncing ? 'Syncing…' : 'Refresh'}
                 </button>
             </div>
 
-            {error && (
-                <div className="glass-card p-4 border-red-500/30 text-red-300 text-sm">
-                    {error}
-                </div>
-            )}
+            {error && <p className="font-mono text-xs text-[#D95D24]">{error}</p>}
 
-            {loading ? (
-                <div className="glass-card p-6 flex items-center justify-center gap-2 text-textMuted text-sm">
-                    <Loader2 size={16} className="animate-spin" /> Checking code folder progress…
-                </div>
-            ) : suggestions.length === 0 ? (
-                <div className="glass-card p-6 text-center space-y-1.5">
-                    <p className="text-sm text-textMuted">
-                        All caught up — no pending topic completions waiting from your linked code folders.
-                    </p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <AnimatePresence>
-                        {suggestions.map((item) => (
-                            <motion.div
-                                key={item.id}
-                                layout
-                                initial={{ opacity: 0, y: 8 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.95 }}
-                                className="glass-card p-4 space-y-3 hover:border-white/20 transition-colors"
+            <div className="divide-y divide-[#F2EFE9]/10 border border-[#D95D24]/35 bg-[#0C0A09]">
+                {suggestions.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                        <div className="min-w-0">
+                            <p className="truncate text-sm text-[#F2EFE9]">{item.topicName}</p>
+                            <p className="truncate font-mono text-[11px] text-[#7D756C]">
+                                {item.roadmapName} · {item.reason}
+                            </p>
+                        </div>
+                        <div className="flex shrink-0 gap-2 font-mono text-xs">
+                            <button
+                                type="button"
+                                onClick={() => handleResolve(item, 'confirmed')}
+                                disabled={busyId === item.id}
+                                className="border border-[#D95D24] bg-[#D95D24] px-3 py-1 font-semibold text-[#060606]"
                             >
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <p className="font-medium text-white truncate">{item.topicName}</p>
-                                        <p className="text-xs text-textMuted mt-0.5 truncate">
-                                            {item.roadmapName} · {item.reason}
-                                        </p>
-                                    </div>
-                                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-textMuted shrink-0">
-                                        {Math.round((item.confidence ?? 0) * 100)}%
-                                    </span>
-                                </div>
-
-                                {item.evidenceFiles?.length > 0 && (
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {item.evidenceFiles.slice(0, 4).map((f) => (
-                                            <span
-                                                key={f.rel_path}
-                                                className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 border border-white/10 text-orange-200"
-                                            >
-                                                <FileCode2 size={11} className="text-orange-400" />
-                                                {f.rel_path}
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
-
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={() => handleResolve(item, 'confirmed')}
-                                        disabled={busyId === item.id}
-                                        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-400/20 hover:bg-emerald-500/25 transition-colors text-xs font-semibold disabled:opacity-50"
-                                    >
-                                        <Check size={14} /> Confirm completed
-                                    </button>
-                                    <button
-                                        onClick={() => handleResolve(item, 'dismissed')}
-                                        disabled={busyId === item.id}
-                                        className="flex items-center gap-1 px-3 py-2 rounded-lg border border-white/10 text-textMuted hover:text-red-400 hover:bg-red-500/10 transition-colors text-xs font-semibold disabled:opacity-50"
-                                        title="Keep in progress for now"
-                                    >
-                                        <X size={13} /> Not yet
-                                    </button>
-                                </div>
-                            </motion.div>
-                        ))}
-                    </AnimatePresence>
-                </div>
-            )}
+                                Confirm
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => handleResolve(item, 'dismissed')}
+                                disabled={busyId === item.id}
+                                className="border border-[#F2EFE9]/14 px-2.5 py-1 text-[#8E867D] hover:text-[#F2EFE9]"
+                            >
+                                Skip
+                            </button>
+                        </div>
+                    </div>
+                ))}
+            </div>
         </section>
     );
 };

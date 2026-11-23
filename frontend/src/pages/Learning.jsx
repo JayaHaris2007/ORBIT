@@ -3,44 +3,26 @@ import { createPortal } from 'react-dom';
 import { useAuth, useTheme } from '../context/AuthContext';
 import { useAppData } from '../context/AppDataContext';
 import { learningService } from '../services/learningService';
-import {
-    Plus, GraduationCap, Map, Target, Sparkles, Trash2,
-    BookOpen, TrendingUp, CheckCircle2, FolderCode,
-} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import CircularProgress from '../components/CircularProgress';
 import ConfirmationModal from '../components/ConfirmationModal';
 import RoadmapDetail from '../components/learning/RoadmapDetail';
 import SuggestedLinks from '../components/learning/SuggestedLinks';
 import CodeSuggestions from '../components/learning/CodeSuggestions';
 
-const CATEGORIES = ['academic', 'technical', 'personal'];
-
-const categoryStyle = (category) => {
-    if (category === 'academic') return 'bg-sky-500/15 text-sky-300 border-sky-400/20';
-    if (category === 'personal') return 'bg-emerald-500/15 text-emerald-300 border-emerald-400/20';
-    return 'bg-orange-500/15 text-orange-300 border-orange-400/20';
-};
-
-const statusDot = {
-    learning: 'bg-amber-400',
-    completed: 'bg-emerald-400',
-    not_started: 'bg-white/25',
-    on_hold: 'bg-red-400',
-};
+const CATEGORIES = ['technical', 'academic', 'personal'];
 
 const Learning = () => {
     const { currentUser } = useAuth();
     const { theme } = useTheme();
     const { revision } = useAppData();
 
+    const [activeTab, setActiveTab] = useState('roadmaps'); // 'roadmaps' | 'next'
     const [progress, setProgress] = useState(null);
     const [roadmaps, setRoadmaps] = useState([]);
     const [nextTopics, setNextTopics] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
 
-    // Roadmap creation + deletion modals
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [newName, setNewName] = useState('');
     const [newCategory, setNewCategory] = useState('technical');
@@ -52,26 +34,48 @@ const Learning = () => {
 
     const loadAll = useCallback(async () => {
         try {
-            setError('');
             const [progressData, roadmapList, nextList] = await Promise.all([
                 learningService.getProgress(),
                 learningService.listRoadmaps(),
                 learningService.getNext(),
             ]);
+            setError('');
             setProgress(progressData);
             setRoadmaps(roadmapList);
             setNextTopics(nextList);
         } catch (loadError) {
             console.error('Error loading learning data:', loadError);
-            setError(loadError.message || 'Could not load the learning tracker.');
+            setError(loadError.message || 'Could not load learning data.');
         } finally {
             setLoading(false);
         }
     }, []);
 
     useEffect(() => {
-        if (currentUser) loadAll();
-    }, [currentUser, revision, loadAll]);
+        if (!currentUser) return undefined;
+        let cancelled = false;
+        Promise.all([
+            learningService.getProgress(),
+            learningService.listRoadmaps(),
+            learningService.getNext(),
+        ])
+            .then(([progressData, roadmapList, nextList]) => {
+                if (cancelled) return;
+                setError('');
+                setProgress(progressData);
+                setRoadmaps(roadmapList);
+                setNextTopics(nextList);
+                setLoading(false);
+            })
+            .catch((loadError) => {
+                if (cancelled) return;
+                setError(loadError.message || 'Could not load learning data.');
+                setLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [currentUser, revision]);
 
     const handleTopicsPasteChange = (val) => {
         setNewTopicsText(val);
@@ -131,9 +135,7 @@ const Learning = () => {
                 setError(deleteError.message);
             }
         } finally {
-            if (selectedRoadmap?.id === targetId) {
-                setSelectedRoadmap(null);
-            }
+            if (selectedRoadmap?.id === targetId) setSelectedRoadmap(null);
             setRoadmapToDelete(null);
             await loadAll();
             setBusy(false);
@@ -151,296 +153,282 @@ const Learning = () => {
 
     if (loading) {
         return (
-            <div className="space-y-8 pb-20">
-                <h1 className="text-3xl font-bold text-white uppercase tracking-widest glow-white">Learning</h1>
-                <div className="glass-card p-12 text-center text-textMuted">Loading your roadmaps…</div>
+            <div className="py-16 text-center font-mono text-xs text-[#7D756C]">
+                Loading roadmaps…
             </div>
         );
     }
 
+    const masteryPct = Math.round(progress?.completionPercent ?? 0);
+
     return (
-        <div data-spidey-section="learning" className="space-y-8 pb-20">
-            <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#F2EFE9]/15 pb-5">
-                <div>
-                    <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#D95D24]">05 · Mastery</span>
-                    <div className="mt-1 flex items-center gap-3">
-                        <h1 className="text-3xl font-bold uppercase tracking-[0.14em] text-[#F2EFE9]">
-                            Learning
-                        </h1>
-                        {learningService.isMock && (
-                            <span className="border border-[#F2EFE9]/15 bg-[#151515] px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-[#9C968E]">
-                                mock mode
-                            </span>
-                        )}
-                    </div>
+        <div data-spidey-section="learning" className="space-y-6">
+            {/* Calm Single-Row Controls: 2 clean tabs + quiet summary + New button */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-1 border border-[#F2EFE9]/12 bg-[#060606] p-1 font-mono text-xs">
+                    <button
+                        type="button"
+                        onClick={() => setActiveTab('roadmaps')}
+                        className={`px-3.5 py-1.5 transition-colors ${
+                            activeTab === 'roadmaps'
+                                ? 'bg-[#D95D24] font-semibold text-[#060606]'
+                                : 'text-[#8E867D] hover:text-[#F2EFE9]'
+                        }`}
+                    >
+                        Roadmaps ({roadmaps.length})
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setActiveTab('next')}
+                        className={`px-3.5 py-1.5 transition-colors ${
+                            activeTab === 'next'
+                                ? 'bg-[#D95D24] font-semibold text-[#060606]'
+                                : 'text-[#8E867D] hover:text-[#F2EFE9]'
+                        }`}
+                    >
+                        Up Next ({nextTopics.length})
+                    </button>
                 </div>
-                <button
-                    onClick={() => setIsCreateOpen(true)}
-                    className="flex items-center gap-2 border border-[#D95D24] bg-[#D95D24] px-4 py-2 font-mono text-xs font-bold uppercase tracking-[0.14em] text-[#111111] transition-colors hover:bg-[#C44E19]"
-                >
-                    <Plus size={15} /> New roadmap
-                </button>
+
+                <div className="flex items-center gap-4">
+                    {progress && (
+                        <span className="hidden font-mono text-xs text-[#7D756C] sm:inline">
+                            {progress.completedTopics}/{progress.topicCount} done · {masteryPct}%
+                        </span>
+                    )}
+                    <button
+                        type="button"
+                        onClick={() => setIsCreateOpen(true)}
+                        className="border border-[#D95D24] bg-[#D95D24] px-4 py-2 font-mono text-xs font-semibold text-[#060606] transition-colors hover:bg-[#E86B30]"
+                    >
+                        + New roadmap
+                    </button>
+                </div>
             </div>
 
             {error && (
-                <div className="glass-card p-4 border-red-500/30 text-red-300 text-sm">
+                <div className="border border-[#D95D24]/60 bg-[#1B0E09] px-4 py-3 font-mono text-xs text-[#F2EFE9]">
                     {error}
                 </div>
             )}
 
-            {/* Progress overview */}
-            {progress && (
-                <div className="glass-card p-6 flex flex-col md:flex-row items-center gap-8">
-                    <CircularProgress value={progress.completionPercent} max={100} size={132} />
-                    <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-6 text-center md:text-left">
-                        <div>
-                            <p className="text-3xl font-bold text-white">{progress.roadmapCount}</p>
-                            <p className="text-xs uppercase tracking-widest text-textMuted mt-1">Roadmaps</p>
-                        </div>
-                        <div>
-                            <p className="text-3xl font-bold text-white">{progress.topicCount}</p>
-                            <p className="text-xs uppercase tracking-widest text-textMuted mt-1">Topics</p>
-                        </div>
-                        <div>
-                            <p className="text-3xl font-bold text-emerald-400">{progress.completedTopics}</p>
-                            <p className="text-xs uppercase tracking-widest text-textMuted mt-1">Completed</p>
-                        </div>
-                        <div>
-                            <p className="text-3xl font-bold text-amber-400">{progress.inProgressTopics}</p>
-                            <p className="text-xs uppercase tracking-widest text-textMuted mt-1">In progress</p>
-                        </div>
+            {/* TAB 1: Clean, Spacious Roadmaps Grid */}
+            {activeTab === 'roadmaps' ? (
+                roadmaps.length === 0 ? (
+                    <div className="border border-[#F2EFE9]/10 bg-[#060606] px-6 py-16 text-center">
+                        <p className="text-sm text-[#A8A096]">No learning roadmaps yet.</p>
+                        <p className="mt-1.5 text-xs text-[#6E675F]">
+                            Create one to track topics step by step, or ask ORBIT in chat.
+                        </p>
+                        <button
+                            type="button"
+                            onClick={() => setIsCreateOpen(true)}
+                            className="mt-5 border border-[#D95D24] bg-[#D95D24]/12 px-4 py-2 font-mono text-xs text-[#F2EFE9] hover:bg-[#D95D24] hover:text-[#060606]"
+                        >
+                            + Create first roadmap
+                        </button>
                     </div>
+                ) : (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <AnimatePresence>
+                            {roadmaps.map((roadmap) => {
+                                const pct = Math.round(roadmap.completionPercent ?? 0);
+                                return (
+                                    <motion.div
+                                        key={roadmap.id}
+                                        layout
+                                        initial={{ opacity: 0, y: 6 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0 }}
+                                        onClick={() => setSelectedRoadmap(roadmap)}
+                                        className="group flex cursor-pointer flex-col justify-between gap-4 border border-[#F2EFE9]/12 bg-[#0C0B0A] p-5 transition-colors hover:border-[#D95D24]/65"
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <h3 className="truncate text-[15px] font-medium text-[#F2EFE9]">
+                                                    {roadmap.name}
+                                                </h3>
+                                                <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-[#7D756C]">
+                                                    {roadmap.category}
+                                                    {roadmap.folderLink ? ' · folder linked' : ''}
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setRoadmapToDelete(roadmap);
+                                                }}
+                                                className="shrink-0 px-1.5 py-0.5 font-mono text-[11px] text-[#5C564F] opacity-0 transition-opacity hover:text-[#D95D24] group-hover:opacity-100"
+                                                title="Delete roadmap"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between font-mono text-[11px]">
+                                                <span className="text-[#8E867D]">
+                                                    {roadmap.completedCount} / {roadmap.topicCount} topics
+                                                </span>
+                                                <span className="text-[#D95D24]">{pct}%</span>
+                                            </div>
+                                            <div className="h-[3px] w-full bg-[#F2EFE9]/10">
+                                                <div
+                                                    className="h-full bg-[#D95D24] transition-all duration-300"
+                                                    style={{ width: `${pct}%` }}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {roadmap.nextTopic && (
+                                            <p className="truncate text-xs text-[#7D756C]">
+                                                Next: <span className="text-[#CFC9BF]">{roadmap.nextTopic}</span>
+                                            </p>
+                                        )}
+                                    </motion.div>
+                                );
+                            })}
+                        </AnimatePresence>
+                    </div>
+                )
+            ) : (
+                /* TAB 2: Up Next + Quiet Sync Reviews */
+                <div className="space-y-6">
+                    {nextTopics.length === 0 ? (
+                        <div className="border border-[#F2EFE9]/10 bg-[#060606] py-12 text-center text-xs text-[#7D756C]">
+                            All queued topics are complete.
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-[#F2EFE9]/10 border border-[#F2EFE9]/12 bg-[#0B0A09]">
+                            {nextTopics.map((topic) => (
+                                <div
+                                    key={topic.topicId}
+                                    className="flex items-center justify-between gap-4 px-4 py-3.5 transition-colors hover:bg-[#110F0D]"
+                                >
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm text-[#F2EFE9]">{topic.name}</p>
+                                        <p className="mt-0.5 truncate font-mono text-[11px] text-[#7D756C]">
+                                            {topic.roadmapName}
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleCompleteTopic(topic)}
+                                        className="shrink-0 border border-[#F2EFE9]/16 px-3 py-1 font-mono text-[11px] text-[#A8A096] hover:border-[#D95D24] hover:text-[#D95D24]"
+                                    >
+                                        Mark done
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <CodeSuggestions
+                        onChanged={loadAll}
+                        hasLinkedFolders={roadmaps.some((r) => Boolean(r.folderLink))}
+                    />
+                    <SuggestedLinks onChanged={loadAll} />
                 </div>
             )}
 
-            {/* Roadmaps grid */}
-            <section className="space-y-4">
-                <div className="flex items-center gap-2 text-white/80">
-                    <Map size={18} className="text-orange-400" />
-                    <h2 className="text-lg font-semibold uppercase tracking-widest">Roadmaps</h2>
-                </div>
-                {roadmaps.length === 0 ? (
-                    <div className="glass-card p-10 text-center space-y-3">
-                        <div className="p-3 bg-white/5 rounded-full w-fit mx-auto text-textMuted"><GraduationCap size={24} /></div>
-                        <p className="text-textMuted">No roadmaps yet — create your first learning path.</p>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                        <AnimatePresence>
-                            {roadmaps.map((roadmap) => (
-                                <motion.div
-                                    key={roadmap.id}
-                                    layout
-                                    initial={{ opacity: 0, y: 12 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, scale: 0.96 }}
-                                    className="glass-card p-6 flex flex-col gap-4 group hover:border-white/20 transition-colors cursor-pointer"
-                                    onClick={() => setSelectedRoadmap(roadmap)}
-                                >
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="flex items-center gap-3 min-w-0">
-                                            <div className="p-2.5 bg-orange-500/15 text-orange-300 rounded-xl shrink-0">
-                                                <BookOpen size={18} />
-                                            </div>
-                                            <div className="min-w-0">
-                                                <h3 className="font-semibold text-white truncate">{roadmap.name}</h3>
-                                                <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border ${categoryStyle(roadmap.category)}`}>
-                                                    {roadmap.category}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); setRoadmapToDelete(roadmap); }}
-                                            className="text-textMuted hover:text-red-400 transition-colors shrink-0"
-                                            title="Delete roadmap"
-                                        >
-                                            <Trash2 size={16} />
-                                        </button>
-                                    </div>
-
-                                    <p className="text-sm text-textMuted line-clamp-2 flex-1">{roadmap.description}</p>
-
-                                    <div className="space-y-2">
-                                        <div className="flex justify-between text-xs text-textMuted">
-                                            <span>{roadmap.completedCount} / {roadmap.topicCount} topics</span>
-                                            <span>{roadmap.completionPercent}%</span>
-                                        </div>
-                                        <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
-                                            <div
-                                                className="h-full rounded-full bg-gradient-to-r from-orange-500 to-amber-400 transition-all duration-500"
-                                                style={{ width: `${roadmap.completionPercent}%` }}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    {roadmap.folderLink && (
-                                        <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-emerald-300/90 bg-emerald-500/10 rounded-lg px-3 py-1.5 border border-emerald-400/20">
-                                            <span className="flex items-center gap-1.5 truncate">
-                                                <FolderCode size={13} className="shrink-0 text-emerald-400" />
-                                                <span className="truncate">
-                                                    {roadmap.folderLink.lastSyncSummary?.practiced_files ?? 0} coded
-                                                    {(roadmap.folderLink.lastSyncSummary?.empty_files ?? 0) > 0
-                                                        ? ` · ${roadmap.folderLink.lastSyncSummary.empty_files} empty`
-                                                        : ''}
-                                                </span>
-                                            </span>
-                                            <span className="text-[10px] uppercase tracking-wider text-emerald-300/70 shrink-0">
-                                                RAG linked
-                                            </span>
-                                        </div>
-                                    )}
-
-                                    {roadmap.nextTopic && (
-                                        <div className="flex items-center gap-2 text-xs text-textMuted bg-white/5 rounded-lg px-3 py-2 border border-white/5">
-                                            <Sparkles size={14} className="text-orange-400 shrink-0" />
-                                            <span className="truncate">Next: <span className="text-white">{roadmap.nextTopic}</span></span>
-                                        </div>
-                                    )}
-                                </motion.div>
-                            ))}
-                        </AnimatePresence>
-                    </div>
-                )}
-            </section>
-
-            {/* Code folder completion suggestions */}
-            <CodeSuggestions
-                onChanged={loadAll}
-                hasLinkedFolders={roadmaps.some((r) => Boolean(r.folderLink))}
-            />
-
-            {/* Suggested task links review queue */}
-            <SuggestedLinks onChanged={loadAll} />
-
-            {/* Next topics */}
-            <section className="space-y-4">
-                <div className="flex items-center gap-2 text-white/80">
-                    <Target size={18} className="text-orange-400" />
-                    <h2 className="text-lg font-semibold uppercase tracking-widest">Ready to learn next</h2>
-                </div>
-                {nextTopics.length === 0 ? (
-                    <div className="glass-card p-10 text-center space-y-3">
-                        <div className="p-3 bg-white/5 rounded-full w-fit mx-auto text-textMuted"><TrendingUp size={24} /></div>
-                        <p className="text-textMuted">Nothing queued — complete a topic to unlock the next one.</p>
-                    </div>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {nextTopics.map((topic) => (
-                            <motion.div
-                                key={topic.topicId}
-                                initial={{ opacity: 0, y: 8 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="glass-card p-4 flex items-center justify-between gap-4 hover:border-white/20 transition-colors"
-                            >
-                                <div className="flex items-center gap-3 min-w-0">
-                                    <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot[topic.status] || statusDot.not_started}`} />
-                                    <div className="min-w-0">
-                                        <p className="font-medium text-white truncate">{topic.name}</p>
-                                        <p className="text-xs text-textMuted truncate">{topic.roadmapName} · {topic.reason}</p>
-                                    </div>
-                                </div>
-                                <button
-                                    onClick={() => handleCompleteTopic(topic)}
-                                    className="shrink-0 p-2 rounded-lg bg-white/5 text-textMuted hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
-                                    title="Mark as completed"
-                                >
-                                    <CheckCircle2 size={18} />
-                                </button>
-                            </motion.div>
-                        ))}
-                    </div>
-                )}
-            </section>
-
-            {/* Create roadmap modal */}
+            {/* Calm Centered New Roadmap Pop-Up */}
             {createPortal(
                 <div className={`app-theme-${theme}`}>
                     <AnimatePresence>
                         {isCreateOpen && (
-                            <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                            <div role="dialog" aria-modal="true" className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 p-4 backdrop-blur-[2px]">
                                 <motion.div
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    exit={{ opacity: 0, scale: 0.95 }}
-                                    className="glass-card w-full max-w-md border border-white/10 p-6 relative text-text"
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: 6 }}
+                                    className="ascii-frame relative w-full max-w-md bg-[#0A0908] p-6 text-[#F2EFE9]"
                                 >
-                            <div className="absolute top-0 left-0 w-full h-1 bg-primary" />
-                            <h3 className="text-xl font-bold text-white uppercase tracking-wide mb-4">New roadmap</h3>
-                            <form onSubmit={handleCreateRoadmap} className="space-y-4">
-                                <div>
-                                    <label className="text-[10px] uppercase font-bold text-textMuted mb-2 block">Name</label>
-                                    <input
-                                        type="text"
-                                        value={newName}
-                                        onChange={(e) => setNewName(e.target.value)}
-                                        placeholder="e.g. C++ or Machine Learning"
-                                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-white text-sm focus:border-orange-400/50 outline-none transition-colors"
-                                        autoFocus
-                                    />
-                                </div>
-                                <div>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <label className="text-[10px] uppercase font-bold text-textMuted">
-                                            Sub-topics (paste headings — one per line)
-                                        </label>
-                                        {detectedSubtopicsCount > 0 && (
-                                            <span className="text-[10px] font-mono uppercase text-orange-300">
-                                                {detectedSubtopicsCount} sub-topic{detectedSubtopicsCount !== 1 ? 's' : ''} detected
-                                            </span>
-                                        )}
+                                    <div className="mb-5 flex items-center justify-between">
+                                        <h3 className="text-base font-medium text-[#F2EFE9]">New Roadmap</h3>
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsCreateOpen(false)}
+                                            className="font-mono text-xs text-[#8E867D] hover:text-[#F2EFE9]"
+                                        >
+                                            ×
+                                        </button>
                                     </div>
-                                    <textarea
-                                        rows={5}
-                                        value={newTopicsText}
-                                        onChange={(e) => handleTopicsPasteChange(e.target.value)}
-                                        placeholder={"Paste headings here (one per line), e.g.:\nBasics & Compilation\nVariables & Data Types\nPointers\n..."}
-                                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-white text-xs font-mono focus:border-orange-400/50 outline-none transition-colors resize-y"
-                                    />
-                                    <label className="mt-2 flex items-center gap-2 text-xs text-textMuted cursor-pointer select-none">
-                                        <input
-                                            type="checkbox"
-                                            checked={autoSubtopics}
-                                            onChange={(e) => setAutoSubtopics(e.target.checked)}
-                                            className="accent-orange-500"
-                                        />
-                                        <span>Auto-divide into sub-topics if none are pasted</span>
-                                    </label>
-                                </div>
-                                <div>
-                                    <label className="text-[10px] uppercase font-bold text-textMuted mb-2 block">Category</label>
-                                    <div className="flex gap-2">
-                                        {CATEGORIES.map((category) => (
-                                            <button
-                                                key={category}
-                                                type="button"
-                                                onClick={() => setNewCategory(category)}
-                                                className={`flex-1 py-2 rounded-lg border text-xs uppercase font-bold tracking-wider transition-colors ${newCategory === category
-                                                    ? 'border-orange-400/60 bg-orange-500/15 text-orange-300'
-                                                    : 'border-white/10 text-textMuted hover:text-white hover:bg-white/5'
+
+                                    <form onSubmit={handleCreateRoadmap} className="space-y-4">
+                                        <div>
+                                            <label className="mb-1.5 block font-mono text-[11px] text-[#8E867D]">
+                                                Title
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={newName}
+                                                onChange={(e) => setNewName(e.target.value)}
+                                                placeholder="e.g. Python, System Design, Calculus"
+                                                className="w-full border border-[#F2EFE9]/14 bg-[#060606] px-3.5 py-2.5 text-sm text-[#F2EFE9] outline-none placeholder:text-[#5C564F] focus:border-[#D95D24]"
+                                                autoFocus
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <div className="mb-1.5 flex items-center justify-between font-mono text-[11px]">
+                                                <label className="text-[#8E867D]">Topics (optional, one per line)</label>
+                                                {detectedSubtopicsCount > 0 && (
+                                                    <span className="text-[#D95D24]">{detectedSubtopicsCount} topics</span>
+                                                )}
+                                            </div>
+                                            <textarea
+                                                rows={4}
+                                                value={newTopicsText}
+                                                onChange={(e) => handleTopicsPasteChange(e.target.value)}
+                                                placeholder={"Paste topics here or leave blank to auto-generate…"}
+                                                className="w-full resize-y border border-[#F2EFE9]/14 bg-[#060606] px-3.5 py-2.5 font-mono text-xs text-[#F2EFE9] outline-none placeholder:text-[#5C564F] focus:border-[#D95D24]"
+                                            />
+                                            <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-[#8E867D] select-none">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={autoSubtopics}
+                                                    onChange={(e) => setAutoSubtopics(e.target.checked)}
+                                                    className="accent-[#D95D24]"
+                                                />
+                                                <span>Auto-generate sub-topics if blank</span>
+                                            </label>
+                                        </div>
+
+                                        <div className="grid grid-cols-3 gap-2 font-mono text-xs">
+                                            {CATEGORIES.map((category) => (
+                                                <button
+                                                    key={category}
+                                                    type="button"
+                                                    onClick={() => setNewCategory(category)}
+                                                    className={`border py-2 capitalize transition-colors ${
+                                                        newCategory === category
+                                                            ? 'border-[#D95D24] bg-[#D95D24] font-semibold text-[#060606]'
+                                                            : 'border-[#F2EFE9]/14 bg-[#060606] text-[#8E867D] hover:text-[#F2EFE9]'
                                                     }`}
+                                                >
+                                                    {category}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        <div className="flex gap-2.5 pt-2 font-mono text-xs">
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsCreateOpen(false)}
+                                                className="flex-1 border border-[#F2EFE9]/14 py-2.5 text-[#8E867D] hover:text-[#F2EFE9]"
                                             >
-                                                {category}
+                                                Cancel
                                             </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="flex gap-3 pt-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => setIsCreateOpen(false)}
-                                        className="flex-1 py-3 rounded-lg border border-white/10 text-textMuted hover:text-white hover:bg-white/5 transition-all uppercase text-xs font-bold tracking-wider"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={(!newName.trim() && !newTopicsText.trim()) || busy}
-                                        className="flex-1 py-3 rounded-lg bg-primary hover:bg-orange-500 text-white transition-all uppercase text-xs font-bold tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {busy ? 'Creating…' : 'Create'}
-                                    </button>
-                                </div>
-                            </form>
+                                            <button
+                                                type="submit"
+                                                disabled={(!newName.trim() && !newTopicsText.trim()) || busy}
+                                                className="flex-1 border border-[#D95D24] bg-[#D95D24] py-2.5 font-semibold text-[#060606] hover:bg-[#E86B30] disabled:opacity-40"
+                                            >
+                                                {busy ? 'Creating…' : 'Create'}
+                                            </button>
+                                        </div>
+                                    </form>
                                 </motion.div>
                             </div>
                         )}
@@ -449,18 +437,16 @@ const Learning = () => {
                 document.body
             )}
 
-            {/* Delete roadmap confirmation */}
             <ConfirmationModal
                 isOpen={Boolean(roadmapToDelete)}
                 onClose={() => setRoadmapToDelete(null)}
                 onConfirm={handleDeleteRoadmap}
                 title="Delete roadmap"
-                message={`Delete "${roadmapToDelete?.name ?? ''}"? Its topics and links will be removed too.`}
+                message={`Delete "${roadmapToDelete?.name ?? ''}" and all of its topics?`}
                 type="danger"
                 confirmString={roadmapToDelete?.name}
             />
 
-            {/* Roadmap detail panel */}
             {selectedRoadmap && (
                 <RoadmapDetail
                     roadmap={selectedRoadmap}

@@ -70,7 +70,7 @@ def _recommend_next_task(
     if not tasks:
         if completed_task_title:
             llm_prompt = (
-                "Write one short, celebratory message as S.P.I.D.E.Y, a warm personal "
+                "Write one short, celebratory message as ORBIT, a warm personal "
                 "assistant. The user just finished their last remaining task. "
                 "Congratulate them and suggest they relax or plan new goals. "
                 "Do not mention AI, prompts, or instructions. Return only the "
@@ -86,7 +86,7 @@ def _recommend_next_task(
         )
         if completed_task_title:
             llm_prompt = (
-                "Write one short, encouraging message as S.P.I.D.E.Y, a warm personal "
+                "Write one short, encouraging message as ORBIT, a warm personal "
                 "assistant. The user just completed a task. Acknowledge it briefly, "
                 "then recommend the next task they should focus on — mention its "
                 "name and priority. Be specific, motivating, and concise. "
@@ -98,7 +98,7 @@ def _recommend_next_task(
             )
         else:
             llm_prompt = (
-                "Write one short, friendly message as S.P.I.D.E.Y, a warm personal "
+                "Write one short, friendly message as ORBIT, a warm personal "
                 "assistant. The user has pending tasks. Gently suggest the "
                 "top-priority task they should focus on — mention its name and "
                 "priority level. Be motivating and brief. "

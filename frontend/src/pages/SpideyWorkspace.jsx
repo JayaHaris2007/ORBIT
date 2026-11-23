@@ -3,20 +3,6 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { AnimatePresence, motion } from 'framer-motion';
 import { format } from 'date-fns';
-import {
-    Check,
-    MessageSquare,
-    MessageSquarePlus,
-    PanelLeftClose,
-    PanelLeftOpen,
-    Radio,
-    Search,
-    Send,
-    Settings as SettingsIcon,
-    Sparkles,
-    Trash2,
-    X,
-} from 'lucide-react';
 import { apiRequest, apiStreamRequest } from '../services/api';
 import { useAppData } from '../context/AppDataContext';
 import { useAuth, useTheme } from '../context/AuthContext';
@@ -25,34 +11,35 @@ import { cleanAssistantText } from '../utils/textUtils';
 import { useVoice } from '../hooks/useVoice';
 import { useVoiceSession } from '../hooks/useVoiceSession';
 import SpeakToggle from '../components/voice/SpeakToggle';
-import ListenButton from '../components/voice/ListenButton';
+import LiveButton from '../components/voice/LiveButton';
+import LiveOverlay from '../components/voice/LiveOverlay';
 import StopButton from '../components/voice/StopButton';
 import OrbitAgentView from '../components/OrbitAgentView';
-import SpiderMark from '../components/brand/SpiderMark';
-import SpideyNeuralCoreCanvas from '../components/three/SpideyNeuralCoreCanvas';
-import SpideyRoamerOverlay from '../components/three/SpideyRoamerOverlay';
+import SpideyAsciiCanvas from '../components/ascii/SpideyAsciiCanvas';
 import SectionCanvasCard from '../components/workspace/SectionCanvasCard';
-import { SECTION_META, SECTION_ORDER } from '../components/workspace/sectionMeta';
+import { SECTION_META } from '../components/workspace/sectionMeta';
 
 const ACTIVE_CHAT_KEY = 'spidey_active_chat_id';
 const LEGACY_ACTIVE_CHAT_KEY = 'jarvis_active_chat_id';
-const SIDEBAR_OPEN_KEY = 'spidey_focus_sidebar_open';
 
-const STARTER_PROMPTS = [
-    { label: "What's pending today?", sectionHint: 'tasks' },
-    { label: 'Check my habits', sectionHint: 'habits' },
-    { label: 'Next in learning', sectionHint: 'learning' },
-    { label: 'Summarize my day', sectionHint: null },
+const QUICK_HINTS = [
+    "What's pending today?",
+    'Open my learning',
+    'Check my habits',
+    'Summarize my day',
 ];
 
 const SLASH_COMMANDS = [
-    { cmd: '/tasks', label: 'Tasks', desc: 'Open focused Tasks card', section: 'tasks' },
-    { cmd: '/habits', label: 'Habits', desc: 'Open focused Habits card', section: 'habits' },
-    { cmd: '/reminders', label: 'Reminders & Memory', desc: 'Open Reminders & Memory card', section: 'reminders' },
-    { cmd: '/learning', label: 'Learning', desc: 'Open Learning Roadmaps card', section: 'learning' },
-    { cmd: '/analytics', label: 'Analytics', desc: 'Open Productivity Telemetry card', section: 'analytics' },
-    { cmd: '/settings', label: 'Settings', desc: 'Open Settings & API config card', section: 'settings' },
-    { cmd: '/chat', label: 'Chat', desc: 'Return to pure S.P.I.D.E.Y chat', section: null },
+    { cmd: '/tasks', desc: 'Open Tasks', section: 'tasks' },
+    { cmd: '/habits', desc: 'Open Habits', section: 'habits' },
+    { cmd: '/learning', desc: 'Open Learning', section: 'learning' },
+    { cmd: '/reminders', desc: 'Open Reminders & Memory', section: 'reminders' },
+    { cmd: '/analytics', desc: 'Open Analytics', section: 'analytics' },
+    { cmd: '/settings', desc: 'Open Settings', section: 'settings' },
+    { cmd: '/live', desc: 'Toggle Live Voice Mode (Ctrl+Space)', action: 'live' },
+    { cmd: '/orbit', desc: 'Open ORBIT007 Live Agent', action: 'orbit' },
+    { cmd: '/new', desc: 'Start a fresh conversation', action: 'new_chat' },
+    { cmd: '/chat', desc: 'Close pop-up & return to chat', section: null },
 ];
 
 const ROUTE_TO_SECTION = {
@@ -92,23 +79,43 @@ function normalizeSectionKey(raw) {
     return undefined;
 }
 
-function detectExplicitCardIntent(text) {
+function detectTopicSection(text) {
     const t = String(text || '').toLowerCase().trim();
     if (!t) return undefined;
-    if (/^(show|open|view|check|pull up|display)\b/.test(t) || /\b(in my|my)\s+(tasks|todos|to-do|habits|reminders|memories|learning|roadmaps|analytics|settings)\b/.test(t)) {
-        if (/\b(task|tasks|todo|todos|to-do|pending)\b/.test(t)) return 'tasks';
-        if (/\b(habit|habits|streak|streaks)\b/.test(t)) return 'habits';
-        if (/\b(reminder|reminders|memory|memories)\b/.test(t)) return 'reminders';
-        if (/\b(learning|roadmap|roadmaps|study|topics)\b/.test(t)) return 'learning';
-        if (/\b(analytics|telemetry|progress|heatmap|stats)\b/.test(t)) return 'analytics';
-        if (/\b(setting|settings|preferences|theme|api key)\b/.test(t)) return 'settings';
+
+    if (/\b(?:back\s+to\s+chat|go\s+to\s+chat|open\s+chat|show\s+chat|chat\s+only|close\s+(?:this|card|panel|section|popup|pop-up))\b/.test(t)) {
+        return null;
+    }
+    if (/\b(?:analytics?|telemetry|heatmap|weekly\s+stats?|productivity\s+score|momentum)\b/.test(t)) {
+        return 'analytics';
+    }
+    if (/\b(?:learn\w*|roadmaps?|stud(?:y|ying)|topics?|lessons?|modules?)\b/.test(t)) {
+        return 'learning';
+    }
+    if (/\b(?:habits?|streaks?|daily\s+routine)\b/.test(t)) {
+        return 'habits';
+    }
+    if (/\b(?:reminders?|remind\s+me|memor(?:y|ies)|remember\s+that|notes?|what\s+do\s+you\s+(?:know|remember)\s+about\s+me)\b/.test(t)) {
+        return 'reminders';
+    }
+    if (/\b(?:settings?|preferences?|change\s+theme|api\s+key|gemini\s+key)\b/.test(t)) {
+        return 'settings';
+    }
+    if (/\b(?:tasks?|to-?dos?|to\s+dos?|what'?s\s+pending\s+today)\b/.test(t)) {
+        return 'tasks';
     }
     return undefined;
 }
 
+function isExplicitOpenIntent(text) {
+    const t = String(text || '').toLowerCase().trim();
+    return /^(?:open|go\s+to|switch\s+to|navigate\s+to|take\s+me\s+to|bring\s+up|close)\b/.test(t)
+        || /^show(?:\s+me)?\s+(?:my\s+|the\s+)?(?:settings?|analytics?|stats?|telemetry)\b/.test(t);
+}
+
 const formatWhen = (value) => {
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? '' : format(date, 'MMM d, h:mm a');
+    return Number.isNaN(date.getTime()) ? '' : format(date, 'MMM d');
 };
 
 const isTypingElement = (el) => {
@@ -131,19 +138,11 @@ export default function SpideyWorkspace() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    // Sidebar state (collapsible slim drawer just like Hedwig)
-    const [sidebarOpen, setSidebarOpen] = useState(() => {
-        try {
-            const saved = localStorage.getItem(SIDEBAR_OPEN_KEY);
-            if (saved !== null) return saved === '1';
-            return typeof window !== 'undefined' ? window.innerWidth >= 1024 : true;
-        } catch {
-            return true;
-        }
-    });
+    // Quiet slide-over chat history drawer (starts closed for pure calm canvas)
+    const [drawerOpen, setDrawerOpen] = useState(false);
     const [chatSearch, setChatSearch] = useState('');
 
-    // Active section card derived directly from the URL route (null = pure chat / hero)
+    // Active section opens as a calm floating pop-up modal
     const activeSection = ROUTE_TO_SECTION[location.pathname] ?? null;
     const [orbitMode, setOrbitMode] = useState(false);
 
@@ -157,35 +156,28 @@ export default function SpideyWorkspace() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [sectionReplyToast, setSectionReplyToast] = useState(null);
-    const [spacePttHeld, setSpacePttHeld] = useState(false);
+    const [liveOpen, setLiveOpen] = useState(false);
+    const [liveTurns, setLiveTurns] = useState([]);
 
     const lastNotificationId = useRef(0);
     const conversationEndRef = useRef(null);
     const activeChatRef = useRef('');
     const requestSeq = useRef(0);
     const submitPromptRef = useRef(null);
-    const spacePttHeldRef = useRef(false);
     const textareaRef = useRef(null);
     const toastTimerRef = useRef(null);
 
     const voice = useVoice();
-
-    // Sync sidebar preference
-    useEffect(() => {
-        try {
-            localStorage.setItem(SIDEBAR_OPEN_KEY, sidebarOpen ? '1' : '0');
-        } catch { /* ignore */ }
-    }, [sidebarOpen]);
 
     const openSection = useCallback((sectionKey) => {
         const normalized = sectionKey ? normalizeSectionKey(sectionKey) : null;
         if (normalized === undefined) return;
         setOrbitMode(false);
         const targetRoute = normalized ? SECTION_TO_ROUTE[normalized] : '/';
-        if (targetRoute && location.pathname !== targetRoute) {
+        if (targetRoute && window.location.pathname !== targetRoute) {
             navigate(targetRoute, { replace: false });
         }
-    }, [location.pathname, navigate]);
+    }, [navigate]);
 
     const showSectionToast = useCallback((text) => {
         if (!text) return;
@@ -193,7 +185,7 @@ export default function SpideyWorkspace() {
         setSectionReplyToast(cleanAssistantText(text));
         toastTimerRef.current = setTimeout(() => {
             setSectionReplyToast(null);
-        }, 9000);
+        }, 7500);
     }, []);
 
     const refreshChats = useCallback(async () => {
@@ -203,9 +195,10 @@ export default function SpideyWorkspace() {
         } catch { /* ignore */ }
     }, []);
 
-    const applyUiActions = useCallback((actions, userPrompt = '') => {
+    const applyUiActions = useCallback((actions, userPrompt = '', navigateHint = null, provider = '') => {
         let navigatedSection = undefined;
-        const touchedSections = new Set();
+        const touchedSections = [];
+        const touchedSet = new Set();
 
         if (Array.isArray(actions)) {
             for (const action of actions) {
@@ -214,13 +207,20 @@ export default function SpideyWorkspace() {
                     const secs = Array.isArray(action.sections) ? action.sections : [];
                     secs.forEach((s) => {
                         const norm = normalizeSectionKey(s);
-                        if (norm) touchedSections.add(norm);
+                        if (norm && !touchedSet.has(norm)) {
+                            touchedSet.add(norm);
+                            touchedSections.push(norm);
+                        }
                     });
                     window.dispatchEvent(new CustomEvent('orbit:refresh', { detail: { sections: secs } }));
                 } else if (action.type === 'navigate') {
                     const target = normalizeSectionKey(action.page || action.route);
                     if (target !== undefined) {
                         navigatedSection = target;
+                        if (target && !touchedSet.has(target)) {
+                            touchedSet.add(target);
+                            touchedSections.push(target);
+                        }
                     }
                 } else {
                     window.dispatchEvent(new CustomEvent('orbit:ui_action', { detail: action }));
@@ -228,58 +228,64 @@ export default function SpideyWorkspace() {
             }
         }
 
-        if (navigatedSection !== undefined) {
-            openSection(navigatedSection);
-        } else {
-            const explicit = detectExplicitCardIntent(userPrompt);
-            if (explicit) {
-                openSection(explicit);
+        const explicitNav = provider === 'local-navigate' || isExplicitOpenIntent(userPrompt);
+        let targetSection = undefined;
+        if (explicitNav) {
+            targetSection = navigatedSection;
+            if (targetSection === undefined && navigateHint) {
+                const normHint = normalizeSectionKey(navigateHint);
+                if (normHint !== undefined) targetSection = normHint;
+            }
+            if (targetSection === undefined) {
+                targetSection = detectTopicSection(userPrompt);
+            }
+            if (targetSection !== undefined) {
+                openSection(targetSection);
             }
         }
 
-        return [...touchedSections];
+        return { touchedSections, targetSection };
     }, [openSection]);
 
     const handleSpeechTranscript = useCallback((text) => {
         if (!text || !text.trim()) return;
+        const trimmed = text.trim();
+        const turnId = `voice-user-${Date.now()}`;
         setMessages((current) => [
             ...current,
-            {
-                id: `voice-user-${Date.now()}`,
-                role: 'user',
-                content: text.trim(),
-            },
+            { id: turnId, role: 'user', content: trimmed },
         ]);
+        setLiveTurns((current) => [...current.slice(-19), { id: turnId, role: 'user', content: trimmed }]);
     }, []);
 
     const handleSpeechReply = useCallback((replyText, data) => {
-        if (data?.chat_id && activeChatRef.current && data.chat_id !== activeChatRef.current) {
-            return;
-        }
+        if (data?.chat_id && activeChatRef.current && data.chat_id !== activeChatRef.current) return;
         if (Array.isArray(data?.messages)) {
             setMessages(data.messages);
         } else if (replyText) {
             setMessages((current) => [
                 ...current,
-                {
-                    id: `voice-assistant-${Date.now()}`,
-                    role: 'assistant',
-                    content: replyText,
-                },
+                { id: `voice-assistant-${Date.now()}`, role: 'assistant', content: replyText },
             ]);
         }
-        const hasNavAction = Array.isArray(data?.ui_actions) && data.ui_actions.some((a) => a?.type === 'navigate');
-        if (data?.navigate && !hasNavAction) {
-            const navTarget = normalizeSectionKey(data.navigate);
-            if (navTarget !== undefined) openSection(navTarget);
-        }
-        applyUiActions(data?.ui_actions, data?.transcript || '');
         if (replyText) {
+            setLiveTurns((current) => [
+                ...current.slice(-19),
+                { id: `voice-assistant-${Date.now()}`, role: 'assistant', content: replyText },
+            ]);
+        }
+        const { targetSection } = applyUiActions(
+            data?.ui_actions,
+            data?.transcript || '',
+            data?.navigate || null,
+            data?.provider || ''
+        );
+        if (replyText && (targetSection !== undefined ? targetSection !== null : activeSection !== null)) {
             showSectionToast(replyText);
         }
         refreshChats();
         refresh();
-    }, [applyUiActions, openSection, refresh, refreshChats, showSectionToast]);
+    }, [activeSection, applyUiActions, refresh, refreshChats, showSectionToast]);
 
     const voiceSession = useVoiceSession({
         onTranscript: handleSpeechTranscript,
@@ -288,78 +294,84 @@ export default function SpideyWorkspace() {
     });
 
     useEffect(() => {
-        if (chatId) {
-            voiceSession.updateChatId(chatId);
-        }
+        if (chatId) voiceSession.updateChatId(chatId);
     }, [chatId, voiceSession]);
 
-    const isVoiceActive = voice.isSpeaking || voiceSession.state !== 'idle';
-    const handleVoiceStop = useCallback(() => {
-        spacePttHeldRef.current = false;
-        setSpacePttHeld(false);
+    const startLiveMode = useCallback(() => {
+        if (!chatId || loading) return;
+        window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
+        setOrbitMode(false);
+        setDrawerOpen(false);
+        openSection(null);
+        setLiveTurns([]);
+        setLiveOpen(true);
+        brain?.triggerPulse?.(1.1);
+        voiceSession.startSession('live', chatId);
+    }, [brain, chatId, loading, openSection, voiceSession]);
+
+    const stopLiveMode = useCallback(() => {
+        setLiveOpen(false);
         voice.stop();
         voiceSession.stopSession();
     }, [voice, voiceSession]);
 
-    // Hold Spacebar to Talk (like Hedwig) + Esc to close active section card
+    const toggleLiveMode = useCallback(() => {
+        if (liveOpen || voiceSession.state !== 'idle') {
+            stopLiveMode();
+        } else {
+            startLiveMode();
+        }
+    }, [liveOpen, startLiveMode, stopLiveMode, voiceSession.state]);
+
+    const isVoiceActive = voice.isSpeaking || voiceSession.state !== 'idle';
+    const handleVoiceStop = useCallback(() => {
+        setLiveOpen(false);
+        voice.stop();
+        voiceSession.stopSession();
+    }, [voice, voiceSession]);
+
+    // Ctrl+Space toggles Live Mode anywhere (even inside the composer) + Esc dismisses overlays
     useEffect(() => {
         const onKeyDown = (e) => {
-            if (e.key === 'Escape' && activeSection && !isTypingElement(document.activeElement)) {
-                // Only close section card if no nested modal overlay is open
-                const hasModal = document.querySelector('[role="dialog"]');
-                if (!hasModal) {
-                    openSection(null);
-                }
-                return;
-            }
             if (
                 e.code === 'Space'
+                && e.ctrlKey
                 && !e.repeat
-                && !e.ctrlKey
                 && !e.metaKey
                 && !e.altKey
-                && !isTypingElement(document.activeElement)
-                && document.activeElement?.tagName !== 'BUTTON'
                 && chatId
                 && !loading
-                && !orbitMode
             ) {
                 e.preventDefault();
-                if (!spacePttHeldRef.current) {
-                    spacePttHeldRef.current = true;
-                    setSpacePttHeld(true);
-                    window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
-                    brain?.triggerPulse?.(1.1);
-                    voiceSession.startSession('ptt', chatId);
-                }
+                toggleLiveMode();
+                return;
             }
-        };
-
-        const releaseSpacePtt = () => {
-            if (!spacePttHeldRef.current) return;
-            spacePttHeldRef.current = false;
-            setSpacePttHeld(false);
-            voiceSession.commitUtterance();
-        };
-
-        const onKeyUp = (e) => {
-            if (e.code === 'Space' && spacePttHeldRef.current) {
-                e.preventDefault();
-                releaseSpacePtt();
+            if (e.key === 'Escape' && !isTypingElement(document.activeElement)) {
+                const nestedDialogs = document.querySelectorAll('[role="dialog"]');
+                if (nestedDialogs.length > 0) return;
+                if (liveOpen) {
+                    stopLiveMode();
+                    return;
+                }
+                if (orbitMode) {
+                    setOrbitMode(false);
+                    return;
+                }
+                if (activeSection) {
+                    openSection(null);
+                    return;
+                }
+                if (drawerOpen) {
+                    setDrawerOpen(false);
+                    return;
+                }
             }
         };
 
         window.addEventListener('keydown', onKeyDown);
-        window.addEventListener('keyup', onKeyUp);
-        window.addEventListener('blur', releaseSpacePtt);
-        return () => {
-            window.removeEventListener('keydown', onKeyDown);
-            window.removeEventListener('keyup', onKeyUp);
-            window.removeEventListener('blur', releaseSpacePtt);
-        };
-    }, [activeSection, brain, chatId, loading, openSection, orbitMode, voiceSession]);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [activeSection, chatId, drawerOpen, liveOpen, loading, openSection, orbitMode, stopLiveMode, toggleLiveMode]);
 
-    // Listen to orbit:navigate events from ORBIT007
     useEffect(() => {
         const handleOrbitNav = (e) => {
             const target = normalizeSectionKey(e.detail?.route || e.detail?.page);
@@ -369,7 +381,6 @@ export default function SpideyWorkspace() {
         return () => window.removeEventListener('orbit:navigate', handleOrbitNav);
     }, [openSection]);
 
-    // Load conversation history + notifications
     const openChat = useCallback(async (id) => {
         const seq = requestSeq.current + 1;
         requestSeq.current = seq;
@@ -410,7 +421,6 @@ export default function SpideyWorkspace() {
         }
     }, []);
 
-    // Initial workspace load
     useEffect(() => {
         let cancelled = false;
         const loadWorkspace = async () => {
@@ -449,7 +459,6 @@ export default function SpideyWorkspace() {
         conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, loading]);
 
-    // Notification polling
     useEffect(() => {
         if (!chatId) return undefined;
         const interval = window.setInterval(async () => {
@@ -480,7 +489,6 @@ export default function SpideyWorkspace() {
         return () => window.clearInterval(interval);
     }, [chatId, refresh, showSectionToast, voice, voiceSession.state]);
 
-    // Periodic proactive check-in
     useEffect(() => {
         if (!chatId) return undefined;
         const triggerCheckin = async () => {
@@ -499,7 +507,6 @@ export default function SpideyWorkspace() {
         };
     }, [chatId]);
 
-    // Data reset listener
     useEffect(() => {
         const handleDataReset = async () => {
             try {
@@ -528,25 +535,26 @@ export default function SpideyWorkspace() {
             .catch(() => {});
     }, [revision]);
 
-    const startChat = async () => {
+    const startChat = useCallback(async () => {
         try {
             const chat = await apiRequest('/api/chats', { method: 'POST' });
             setChats((current) => [chat, ...current]);
             setPrompt('');
             setOrbitMode(false);
+            setDrawerOpen(false);
             openSection(null);
             await openChat(chat.id);
         } catch (requestError) {
             setError(requestError.message);
         }
-    };
+    }, [openChat, openSection]);
 
     const selectChat = (id) => {
         setConfirmingId('');
         setOrbitMode(false);
+        setDrawerOpen(false);
         openSection(null);
         if (id !== chatId) openChat(id);
-        if (window.innerWidth < 1024) setSidebarOpen(false);
     };
 
     const deleteChat = async (id) => {
@@ -569,15 +577,33 @@ export default function SpideyWorkspace() {
         }
     };
 
+    const executeSlashCommand = useCallback((item) => {
+        setPrompt('');
+        if (item.action === 'live') {
+            toggleLiveMode();
+            return;
+        }
+        if (item.action === 'orbit') {
+            window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
+            setOrbitMode(true);
+            return;
+        }
+        if (item.action === 'new_chat') {
+            startChat();
+            return;
+        }
+        openSection(item.section);
+    }, [openSection, startChat, toggleLiveMode]);
+
     const submitPrompt = async (rawValue) => {
         const value = rawValue.trim();
         if (!value || loading || !chatId) return;
 
-        // Instant slash command handling (/tasks, /habits, /learning, etc.)
+        window.dispatchEvent(new CustomEvent('spidey:submit_wave'));
+
         const slashMatch = SLASH_COMMANDS.find((c) => c.cmd === value.toLowerCase());
         if (slashMatch) {
-            setPrompt('');
-            openSection(slashMatch.section);
+            executeSlashCommand(slashMatch);
             return;
         }
 
@@ -585,16 +611,11 @@ export default function SpideyWorkspace() {
         const streamingId = `streaming-${optimisticId}`;
         setMessages((current) => [
             ...current,
-            {
-                id: optimisticId,
-                role: 'user',
-                content: value,
-                pending: true,
-            },
+            { id: optimisticId, role: 'user', content: value, pending: true },
         ]);
         setLoading(true);
         brain?.setBrainState('thinking');
-        brain?.triggerPulse?.(0.8);
+        brain?.triggerPulse?.(0.95);
         setPrompt('');
         setError('');
 
@@ -607,7 +628,7 @@ export default function SpideyWorkspace() {
                 if (activeChatRef.current !== chatId || !evt || !evt.type) return;
                 if (evt.type === 'token' && evt.text) {
                     brain?.setBrainState('streaming');
-                    brain?.triggerPulse?.(0.4);
+                    brain?.triggerPulse?.(0.45);
                     setMessages((current) => {
                         const idx = current.findIndex((m) => m.id === streamingId);
                         if (idx !== -1) {
@@ -632,12 +653,12 @@ export default function SpideyWorkspace() {
 
             if (activeChatRef.current !== chatId || !finalData) return;
             const data = finalData;
-            const touchedSections = applyUiActions(data.ui_actions, value);
-            const hasNavAction = Array.isArray(data.ui_actions) && data.ui_actions.some((a) => a?.type === 'navigate');
-            if (data.navigate && !hasNavAction) {
-                const navTarget = normalizeSectionKey(data.navigate);
-                if (navTarget !== undefined) openSection(navTarget);
-            }
+            const { touchedSections, targetSection } = applyUiActions(
+                data.ui_actions,
+                value,
+                data.navigate || null,
+                data.provider || ''
+            );
 
             setMessages((current) => {
                 const existingNotifs = current.filter((m) => m.notification);
@@ -654,7 +675,8 @@ export default function SpideyWorkspace() {
                 });
             });
 
-            if (activeSection && data.response) {
+            const effectiveSection = targetSection !== undefined ? targetSection : activeSection;
+            if (effectiveSection && data.response) {
                 showSectionToast(data.response);
             }
 
@@ -682,7 +704,6 @@ export default function SpideyWorkspace() {
         submitPromptRef.current = submitPrompt;
     });
 
-    // External prompt & voice events
     useEffect(() => {
         const onExternalPrompt = (event) => {
             const incoming = event?.detail?.prompt;
@@ -690,13 +711,7 @@ export default function SpideyWorkspace() {
             submitPromptRef.current?.(incoming);
         };
         const onToggleVoice = () => {
-            if (!chatId || loading) return;
-            window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
-            if (voiceSession.state !== 'idle') {
-                voiceSession.stopSession();
-            } else {
-                voiceSession.startSession('live', chatId);
-            }
+            toggleLiveMode();
         };
         window.addEventListener('spidey:prompt', onExternalPrompt);
         window.addEventListener('spidey:open_live', onToggleVoice);
@@ -706,669 +721,563 @@ export default function SpideyWorkspace() {
             window.removeEventListener('spidey:open_live', onToggleVoice);
             window.removeEventListener('spidey:open_listen', onToggleVoice);
         };
-    }, [chatId, loading, voiceSession]);
+    }, [toggleLiveMode]);
 
     const filteredChats = useMemo(() => {
         const q = chatSearch.trim().toLowerCase();
         if (!q) return chats;
-        return chats.filter((c) => (c.title || 'New conversation').toLowerCase().includes(q));
+        return chats.filter((c) => (c.title || 'New session').toLowerCase().includes(q));
     }, [chats, chatSearch]);
 
     const slashSuggestions = useMemo(() => {
         const trimmed = prompt.trim().toLowerCase();
         if (!trimmed.startsWith('/')) return [];
-        return SLASH_COMMANDS.filter((item) => item.cmd.startsWith(trimmed) || item.label.toLowerCase().includes(trimmed.slice(1)));
+        return SLASH_COMMANDS.filter((item) => item.cmd.startsWith(trimmed) || item.desc.toLowerCase().includes(trimmed.slice(1)));
     }, [prompt]);
 
-    const isHero = !activeSection && !orbitMode && messages.length === 0 && !loading;
-
+    const isHero = messages.length === 0 && !loading;
     const brainState = brain?.brainState || 'idle';
+
     const voiceCaption = useMemo(() => {
-        if (spacePttHeld || (voiceSession.state === 'listening' && voiceSession.mode === 'ptt')) {
-            return 'Listening... release Space to send';
-        }
-        if (voiceSession.state === 'listening') return 'Listening live... speak anytime';
-        if (voiceSession.state === 'transcribing') return 'Transcribing voice...';
-        if (voiceSession.state === 'thinking' || brainState === 'thinking') return 'Thinking...';
-        if (brainState === 'streaming') return 'Streaming response...';
-        if (voiceSession.state === 'speaking' || voice.isSpeaking) return 'Speaking...';
-        return 'Hold Space to talk · or type below';
-    }, [spacePttHeld, voiceSession.state, voiceSession.mode, brainState, voice.isSpeaking]);
+        if (voiceSession.state === 'connecting') return 'Connecting live mode…';
+        if (voiceSession.state === 'listening') return voiceSession.isMuted ? 'Live mode muted' : 'Listening live…';
+        if (voiceSession.state === 'transcribing') return 'Transcribing…';
+        if (voiceSession.state === 'thinking' || brainState === 'thinking') return 'Thinking…';
+        if (brainState === 'streaming') return 'Responding…';
+        if (voiceSession.state === 'speaking' || voice.isSpeaking) return 'Speaking…';
+        return 'Ctrl+Space for Live Mode · type / for commands';
+    }, [voiceSession.state, voiceSession.isMuted, brainState, voice.isSpeaking]);
 
     const handleSendSubmit = (e) => {
         e.preventDefault();
         submitPrompt(prompt);
     };
 
+    const handlePromptChange = (e) => {
+        setPrompt(e.target.value);
+    };
+
     const handleComposerKeyDown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             if (slashSuggestions.length === 1 && prompt.trim().startsWith('/')) {
-                setPrompt('');
-                openSection(slashSuggestions[0].section);
+                executeSlashCommand(slashSuggestions[0]);
                 return;
             }
             submitPrompt(prompt);
+            return;
+        }
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (e.key.length === 1 || e.key === 'Backspace') {
+                window.dispatchEvent(
+                    new CustomEvent('spidey:keystroke', {
+                        detail: { key: e.key, isDelete: e.key === 'Backspace' },
+                    })
+                );
+            }
         }
     };
 
     return (
-        <div className={`app-theme-${theme} relative flex h-dvh w-screen overflow-hidden bg-[#111111] text-[#F2EFE9] font-sans`}>
-            <div aria-hidden="true" className="spidey-paper-grain" />
+        <div className={`app-theme-${theme} relative flex h-dvh w-screen flex-col overflow-hidden bg-[#050505] text-[#F2EFE9]`}>
+            {/* FULL-SCREEN INTERACTIVE TOPOGRAPHIC ASCII BACKGROUND (Mouse + Typing Reactive) */}
+            <SpideyAsciiCanvas />
+            {/* Soft radial vignette for serene contrast and effortless readability */}
+            <div
+                aria-hidden="true"
+                className="pointer-events-none fixed inset-0 z-[1] bg-[radial-gradient(ellipse_at_center,transparent_25%,rgba(5,5,5,0.62)_100%)]"
+            />
 
-            {/* Mobile backdrop when left drawer is open */}
-            <AnimatePresence>
-                {sidebarOpen && (
-                    <motion.button
-                        type="button"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        onClick={() => setSidebarOpen(false)}
-                        aria-label="Close sidebar"
-                        className="fixed inset-0 z-30 bg-black/65 backdrop-blur-[2px] lg:hidden"
+            {/* Larger crisp floating corner history toggle — ZERO top navbar */}
+            <button
+                type="button"
+                onClick={() => setDrawerOpen(true)}
+                aria-label="Open chat history"
+                title="Conversations"
+                className="fixed left-4 top-4 z-20 flex h-10 w-10 items-center justify-center border border-[#F2EFE9]/14 bg-[#070606]/78 text-[#CFC9BF] backdrop-blur-sm transition-colors hover:border-[#D95D24] hover:text-[#F2EFE9]"
+            >
+                <span className="flex flex-col gap-[4.5px]">
+                    <span className="block h-[1.5px] w-4 bg-current" />
+                    <span className="block h-[1.5px] w-4 bg-current" />
+                    <span className="block h-[1.5px] w-3 bg-current" />
+                </span>
+            </button>
+
+            {/* Subtle floating ORBIT brand mark in top-right corner */}
+            {!liveOpen && (
+                <div className="pointer-events-none fixed right-5 top-4 z-20 flex items-center gap-2.5 select-none">
+                    <img
+                        src="/logo.png"
+                        alt="ORBIT"
+                        className="h-7 w-7 rounded-full object-cover"
                     />
+                    <span className="font-mono text-xs font-semibold tracking-[0.26em] text-[#F2EFE9]/90">
+                        ORBIT
+                    </span>
+                </div>
+            )}
+
+            {/* Slide-Over Chat History Drawer (Hidden until needed) */}
+            <AnimatePresence>
+                {drawerOpen && (
+                    <>
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setDrawerOpen(false)}
+                            className="fixed inset-0 z-40 bg-black/70 backdrop-blur-[2px]"
+                        />
+                        <motion.aside
+                            initial={{ x: '-100%' }}
+                            animate={{ x: 0 }}
+                            exit={{ x: '-100%' }}
+                            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                            className="fixed inset-y-0 left-0 z-50 flex w-[272px] flex-col border-r border-[#F2EFE9]/12 bg-[#080807]"
+                        >
+                            <div className="flex items-center justify-between px-5 py-4">
+                                <div className="flex items-center gap-2.5">
+                                    <img
+                                        src="/logo.png"
+                                        alt="ORBIT"
+                                        className="h-5 w-5 rounded-full object-cover"
+                                    />
+                                    <span className="font-mono text-xs font-semibold tracking-[0.22em] text-[#F2EFE9]">
+                                        ORBIT
+                                    </span>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setDrawerOpen(false)}
+                                    className="font-mono text-xs text-[#7D756C] hover:text-[#F2EFE9]"
+                                >
+                                    [×]
+                                </button>
+                            </div>
+
+                            <div className="space-y-2.5 px-4 pb-3">
+                                <button
+                                    type="button"
+                                    onClick={startChat}
+                                    className="w-full border border-[#D95D24]/70 bg-[#D95D24]/12 py-2 font-mono text-xs text-[#F2EFE9] transition-colors hover:bg-[#D95D24] hover:text-[#060606]"
+                                >
+                                    + New chat
+                                </button>
+                                <input
+                                    type="text"
+                                    value={chatSearch}
+                                    onChange={(e) => setChatSearch(e.target.value)}
+                                    placeholder="Search chats…"
+                                    className="w-full border border-[#F2EFE9]/12 bg-[#060606] px-3 py-1.5 font-mono text-xs text-[#F2EFE9] outline-none placeholder:text-[#5C564F] focus:border-[#D95D24]"
+                                />
+                            </div>
+
+                            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+                                <div className="space-y-0.5">
+                                    {filteredChats.map((chat) => {
+                                        const isActive = chat.id === chatId;
+                                        const confirming = confirmingId === chat.id;
+                                        return (
+                                            <div
+                                                key={chat.id}
+                                                className={`group flex items-center gap-1 px-2.5 py-2 transition-colors ${
+                                                    isActive
+                                                        ? 'border-l-2 border-[#D95D24] bg-[#140E0A] text-[#F2EFE9]'
+                                                        : 'text-[#8E867D] hover:bg-[#0F0E0D] hover:text-[#F2EFE9]'
+                                                }`}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    onClick={() => selectChat(chat.id)}
+                                                    className="min-w-0 flex-1 text-left"
+                                                >
+                                                    <div className="truncate text-xs">{chat.title || 'New chat'}</div>
+                                                    <div className="mt-0.5 font-mono text-[10px] text-[#5C564F]">
+                                                        {formatWhen(chat.updated_at)}
+                                                    </div>
+                                                </button>
+                                                {confirming ? (
+                                                    <div className="flex shrink-0 items-center gap-1 font-mono text-[10px]">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => deleteChat(chat.id)}
+                                                            className="bg-[#D95D24] px-1.5 py-0.5 text-[#060606]"
+                                                        >
+                                                            yes
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setConfirmingId('')}
+                                                            className="px-1.5 py-0.5 text-[#8E867D]"
+                                                        >
+                                                            no
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setConfirmingId(chat.id)}
+                                                        className="px-1 font-mono text-[10px] text-[#5C564F] opacity-0 transition-opacity hover:text-[#D95D24] group-hover:opacity-100"
+                                                    >
+                                                        ×
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                    {!filteredChats.length && (
+                                        <p className="px-2 py-6 text-center font-mono text-[11px] text-[#5C564F]">
+                                            No chats found
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-between border-t border-[#F2EFE9]/10 px-4 py-3 font-mono text-[11px] text-[#7D756C]">
+                                <span className="truncate">{currentUser?.displayName || 'Local'}</span>
+                                <span className={online ? 'text-[#D95D24]' : 'text-[#5C564F]'}>
+                                    {online ? '● online' : '○ offline'}
+                                </span>
+                            </div>
+                        </motion.aside>
+                    </>
                 )}
             </AnimatePresence>
 
-            {/* Collapsible Minimal Left Sidebar (Hedwig-style dark rail) */}
-            <aside
-                className={`fixed inset-y-0 left-0 z-40 flex w-[256px] shrink-0 flex-col border-r border-[#F2EFE9]/10 bg-[#0E0E0E]/95 backdrop-blur-xl transition-transform duration-200 lg:static lg:z-20 ${
-                    sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:hidden'
+            {/* PURE CALM FOREGROUND OVER FULL-SCREEN INTERACTIVE ASCII BACKGROUND */}
+            <main
+                className={`relative z-10 flex min-h-0 flex-1 flex-col items-center overflow-hidden transition-opacity duration-200 ${
+                    liveOpen && !activeSection && !orbitMode ? 'pointer-events-none opacity-0' : 'opacity-100'
                 }`}
             >
-                {/* Brand + Collapse */}
-                <div className="flex items-center justify-between gap-2 border-b border-[#F2EFE9]/10 px-4 py-3.5">
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setOrbitMode(false);
-                            openSection(null);
-                        }}
-                        className="flex min-w-0 items-center gap-2.5 text-left"
-                    >
-                        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[#F2EFE9]/15 bg-[#151515]">
-                            <SpiderMark size={24} state={brainState} animateEntrance={false} />
-                        </div>
-                        <div className="min-w-0">
-                            <span className="block truncate text-xs font-bold tracking-[0.22em] text-[#F2EFE9]">
-                                S.P.I.D.E.Y
-                            </span>
-                            <span className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-[#9C968E]">
-                                <span className={`h-1.5 w-1.5 rounded-full ${online ? 'bg-[#D95D24]' : 'bg-[#9C968E]/40'}`} />
-                                {online ? 'Neural Ready' : 'Connecting'}
-                            </span>
-                        </div>
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setSidebarOpen(false)}
-                        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[#F2EFE9]/10 bg-[#151515] text-[#9C968E] hover:border-[#D95D24]/60 hover:text-[#F2EFE9]"
-                        title="Collapse sidebar"
-                        aria-label="Collapse sidebar"
-                    >
-                        <PanelLeftClose size={14} />
-                    </button>
-                </div>
-
-                {/* New Chat + Search */}
-                <div className="space-y-2 border-b border-[#F2EFE9]/10 p-3">
-                    <button
-                        type="button"
-                        onClick={startChat}
-                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#D95D24]/50 bg-[#D95D24]/15 px-3 py-2 text-xs font-semibold text-[#F2EFE9] transition-colors hover:border-[#D95D24] hover:bg-[#D95D24] hover:text-[#111111]"
-                    >
-                        <MessageSquarePlus size={14} />
-                        <span>New Chat</span>
-                    </button>
-                    <div className="relative">
-                        <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[#9C968E]/70" />
-                        <input
-                            type="text"
-                            value={chatSearch}
-                            onChange={(e) => setChatSearch(e.target.value)}
-                            placeholder="Filter chats..."
-                            className="w-full rounded-lg border border-[#F2EFE9]/10 bg-[#141414] py-1.5 pl-7 pr-2.5 text-xs text-[#F2EFE9] outline-none placeholder:text-[#9C968E]/60 focus:border-[#D95D24]/60"
-                        />
-                    </div>
-                </div>
-
-                {/* Chat History */}
-                <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
-                    <div className="mb-1.5 px-2 font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-[#9C968E]/70">
-                        Conversations
-                    </div>
-                    <div className="space-y-0.5">
-                        {filteredChats.map((chat) => {
-                            const isActive = chat.id === chatId && !activeSection && !orbitMode;
-                            const confirming = confirmingId === chat.id;
-                            return (
-                                <div
-                                    key={chat.id}
-                                    className={`group flex items-center gap-1 rounded-lg border transition-colors ${
-                                        isActive
-                                            ? 'border-[#D95D24]/45 bg-[#1B1511]'
-                                            : 'border-transparent hover:bg-[#161616]'
-                                    }`}
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={() => selectChat(chat.id)}
-                                        className={`min-w-0 flex-1 px-2.5 py-2 text-left ${
-                                            isActive ? 'text-[#F2EFE9]' : 'text-[#9C968E] hover:text-[#F2EFE9]'
-                                        }`}
-                                    >
-                                        <span className="flex items-center gap-1.5">
-                                            <span className="block truncate text-xs font-medium">
-                                                {chat.title || 'New conversation'}
-                                            </span>
-                                            {chat.id === chatId && (
-                                                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#D95D24]" />
-                                            )}
-                                        </span>
-                                        <span className="mt-0.5 block font-mono text-[9px] text-[#9C968E]/60">
-                                            {formatWhen(chat.updated_at)}
-                                        </span>
-                                    </button>
-                                    {confirming ? (
-                                        <div className="flex shrink-0 items-center gap-1 pr-1.5">
-                                            <button
-                                                type="button"
-                                                onClick={() => deleteChat(chat.id)}
-                                                className="grid h-6 w-6 place-items-center rounded border border-[#D95D24] bg-[#D95D24] text-[#111111]"
-                                                title="Confirm delete"
-                                            >
-                                                <Check size={12} />
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setConfirmingId('')}
-                                                className="grid h-6 w-6 place-items-center rounded border border-[#F2EFE9]/15 bg-[#111111] text-[#9C968E]"
-                                                title="Cancel"
-                                            >
-                                                <X size={12} />
-                                            </button>
-                                        </div>
-                                    ) : (
-                                        <button
-                                            type="button"
-                                            onClick={() => setConfirmingId(chat.id)}
-                                            className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded text-[#9C968E] opacity-0 transition-opacity hover:text-[#D95D24] group-hover:opacity-100 focus-visible:opacity-100"
-                                            title="Delete chat"
-                                            aria-label={`Delete ${chat.title || 'conversation'}`}
-                                        >
-                                            <Trash2 size={12} />
-                                        </button>
-                                    )}
-                                </div>
-                            );
-                        })}
-                        {!filteredChats.length && (
-                            <p className="px-2 py-4 text-center font-mono text-[10px] text-[#9C968E]/70">
-                                No matching chats.
-                            </p>
-                        )}
-                    </div>
-                </div>
-
-                {/* User Footer */}
-                <div className="flex items-center justify-between gap-2 border-t border-[#F2EFE9]/10 px-3.5 py-3">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                        <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-[#D95D24]/40 bg-[#1B1511] font-mono text-[10px] font-bold text-[#E07A48]">
-                            {(currentUser?.displayName || 'S').slice(0, 1).toUpperCase()}
-                        </div>
-                        <div className="min-w-0">
-                            <p className="truncate text-xs font-medium text-[#F2EFE9]">
-                                {currentUser?.displayName || 'Shadow Hunter'}
-                            </p>
-                            <p className="truncate font-mono text-[9px] uppercase tracking-[0.12em] text-[#9C968E]">
-                                Local Runtime
-                            </p>
-                        </div>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => openSection(activeSection === 'settings' ? null : 'settings')}
-                        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-[#F2EFE9]/10 bg-[#151515] text-[#9C968E] hover:border-[#D95D24]/60 hover:text-[#F2EFE9]"
-                        title="Settings"
-                        aria-label="Open Settings"
-                    >
-                        <SettingsIcon size={13} />
-                    </button>
-                </div>
-            </aside>
-
-            {/* Single Focused Main Window */}
-            <main className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
-                {/* Minimal Clean Top Bar */}
-                <header
-                    data-spidey-anchor="navbar"
-                    className="flex shrink-0 items-center justify-between gap-2 border-b border-[#F2EFE9]/8 bg-[#111111]/85 px-3 py-2.5 backdrop-blur-md sm:px-5"
-                >
-                    <div className="flex min-w-0 items-center gap-2">
-                        {!sidebarOpen && (
-                            <button
-                                type="button"
-                                onClick={() => setSidebarOpen(true)}
-                                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[#F2EFE9]/12 bg-[#161616] text-[#9C968E] hover:border-[#D95D24]/60 hover:text-[#F2EFE9]"
-                                title="Open sidebar"
-                                aria-label="Open sidebar"
-                            >
-                                <PanelLeftOpen size={14} />
-                            </button>
-                        )}
-
-                        {/* Clean Single-Row Section Pill Switcher */}
-                        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setOrbitMode(false);
-                                    openSection(null);
-                                }}
-                                className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                                    !activeSection && !orbitMode
-                                        ? 'border-[#D95D24]/60 bg-[#D95D24]/15 text-[#F2EFE9]'
-                                        : 'border-transparent text-[#9C968E] hover:border-[#F2EFE9]/12 hover:bg-[#171614] hover:text-[#F2EFE9]'
+                {isHero ? (
+                    /* Serene Hero Stage Floating Effortlessly Over the Living ASCII Terrain */
+                    <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center px-6 pb-8">
+                        <div className="text-center">
+                            <img
+                                src="/logo.png"
+                                alt="ORBIT"
+                                className="mx-auto mb-3.5 h-12 w-12 rounded-full object-cover"
+                            />
+                            <h1 className="font-mono text-2xl font-medium tracking-[0.42em] text-[#F2EFE9] sm:text-3xl">
+                                ORBIT
+                            </h1>
+                            <p
+                                className={`mt-3 font-mono text-xs transition-colors ${
+                                    liveOpen || voiceSession.state !== 'idle'
+                                        ? 'text-[#FF944D]'
+                                        : 'text-[#A8A096]'
                                 }`}
                             >
-                                <MessageSquare size={12} className={!activeSection && !orbitMode ? 'text-[#D95D24]' : ''} />
-                                <span>Chat</span>
-                            </button>
-                            {SECTION_ORDER.map((secId) => {
-                                const meta = SECTION_META[secId];
-                                const Icon = meta.icon;
-                                const isActive = activeSection === secId && !orbitMode;
-                                return (
-                                    <button
-                                        key={secId}
-                                        type="button"
-                                        onClick={() => openSection(isActive ? null : secId)}
-                                        className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                                            isActive
-                                                ? 'border-[#D95D24]/60 bg-[#D95D24]/15 text-[#F2EFE9]'
-                                                : 'border-transparent text-[#9C968E] hover:border-[#F2EFE9]/12 hover:bg-[#171614] hover:text-[#F2EFE9]'
-                                        }`}
-                                        title={meta.label}
-                                    >
-                                        <Icon size={12} className={isActive ? 'text-[#D95D24]' : ''} />
-                                        <span className="hidden md:inline">
-                                            {secId === 'reminders' ? 'Reminders' : meta.label}
-                                        </span>
-                                    </button>
-                                );
-                            })}
+                                {voiceSession.transcript && voiceSession.state !== 'idle'
+                                    ? `“${voiceSession.transcript}”`
+                                    : voiceCaption}
+                            </p>
+                        </div>
+
+                        {/* Quiet, Minimal Prompt Hints */}
+                        <div className="mt-8 flex max-w-xl flex-wrap items-center justify-center gap-2.5">
+                            {QUICK_HINTS.map((hint) => (
+                                <button
+                                    key={hint}
+                                    type="button"
+                                    onClick={() => submitPrompt(hint)}
+                                    disabled={loading || !chatId}
+                                    className="border border-[#F2EFE9]/14 bg-[#070606]/78 px-3.5 py-1.5 text-xs text-[#CFC9BF] backdrop-blur-[2px] transition-colors hover:border-[#D95D24] hover:bg-[#120B07]/90 hover:text-[#F2EFE9] disabled:opacity-35"
+                                >
+                                    {hint}
+                                </button>
+                            ))}
                         </div>
                     </div>
-
-                    {/* Minimal Right Controls (Speak, ORBIT007, New Chat) */}
-                    <div className="flex shrink-0 items-center gap-1.5">
-                        <SpeakToggle
-                            speakEnabled={voice.speakEnabled}
-                            engineReady={voice.engineReady}
-                            onToggle={voice.toggleSpeak}
-                            error={voice.error}
-                        />
-                        <button
-                            type="button"
-                            onClick={() => {
-                                window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
-                                setOrbitMode((v) => !v);
-                            }}
-                            className={`flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.1em] transition-colors ${
-                                orbitMode
-                                    ? 'border-[#D95D24] bg-[#D95D24] text-[#111111]'
-                                    : 'border-[#F2EFE9]/12 bg-[#161616] text-[#9C968E] hover:border-[#D95D24]/60 hover:text-[#F2EFE9]'
-                            }`}
-                            title="Toggle ORBIT007 Live Agent Mode"
-                        >
-                            <Radio size={11} />
-                            <span className="hidden sm:inline">ORBIT007</span>
-                        </button>
-                        {!sidebarOpen && (
-                            <button
-                                type="button"
-                                onClick={startChat}
-                                className="grid h-7 w-7 place-items-center rounded-lg border border-[#F2EFE9]/12 bg-[#161616] text-[#9C968E] hover:border-[#D95D24]/60 hover:text-[#F2EFE9]"
-                                title="Start new chat"
-                                aria-label="Start new chat"
-                            >
-                                <MessageSquarePlus size={13} />
-                            </button>
-                        )}
-                    </div>
-                </header>
-
-                {/* Dynamic Center Stage */}
-                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-                    {/* 1. Content Region (only takes vertical space when NOT in Hero idle mode) */}
-                    {!isHero && (
-                        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 pt-3 sm:px-6 sm:pt-4">
-                            {orbitMode ? (
-                                <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col overflow-hidden rounded-2xl border border-[#F2EFE9]/12 bg-[#151515]">
-                                    <div className="flex items-center justify-between border-b border-[#F2EFE9]/10 px-4 py-2.5">
-                                        <span className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-[#D95D24]">
-                                            ORBIT007 Live Agent
-                                        </span>
-                                        <button
-                                            type="button"
-                                            onClick={() => setOrbitMode(false)}
-                                            className="rounded-lg border border-[#F2EFE9]/12 px-2 py-1 font-mono text-[10px] text-[#9C968E] hover:border-[#D95D24] hover:text-[#F2EFE9]"
-                                        >
-                                            Exit
-                                        </button>
-                                    </div>
-                                    <div className="min-h-0 flex-1">
-                                        <OrbitAgentView activeChatId={chatId} />
-                                    </div>
-                                </div>
-                            ) : activeSection ? (
-                                <AnimatePresence mode="wait">
-                                    <SectionCanvasCard
-                                        key={activeSection}
-                                        sectionId={activeSection}
-                                        onClose={() => openSection(null)}
-                                        onAskSpidey={(q) => submitPrompt(q)}
-                                    />
-                                </AnimatePresence>
-                            ) : (
-                                /* Focused Centered Chat Stream */
-                                <div className="mx-auto min-h-0 w-full max-w-3xl flex-1 space-y-4 overflow-y-auto px-1 pb-4 pt-2 sm:px-2">
-                                    {messages.slice(-40).map((item, index) => {
-                                        const isUser = item.role === 'user';
-                                        return (
-                                            <motion.div
-                                                key={`${item.role}-${item.id || index}`}
-                                                initial={{ opacity: 0, y: 8 }}
-                                                animate={{ opacity: 1, y: 0 }}
-                                                transition={{ duration: 0.18 }}
-                                                className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}
-                                            >
-                                                {!isUser && (
-                                                    <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-[#F2EFE9]/12 bg-[#161616]">
-                                                        <SpiderMark size={18} state="idle" animateEntrance={false} />
-                                                    </div>
-                                                )}
-                                                <div className={`max-w-[85%] space-y-2 ${isUser ? 'items-end' : 'items-start'}`}>
-                                                    <div
-                                                        className={`rounded-2xl px-4 py-3 text-[13px] leading-relaxed ${
-                                                            item.failed
-                                                                ? 'border border-[#D95D24] bg-[#24130D] text-[#F2EFE9]'
-                                                                : isUser
-                                                                ? 'border border-[#D95D24]/45 bg-[#1D1510] text-[#F2EFE9]'
-                                                                : 'border border-[#F2EFE9]/10 bg-[#161616] text-[#F2EFE9]'
-                                                        } ${item.pending ? 'opacity-70' : ''}`}
-                                                    >
-                                                        {!isUser ? (
-                                                            <div className="assistant-message">
-                                                                <ReactMarkdown>{cleanAssistantText(item.content)}</ReactMarkdown>
-                                                                {item.streaming && (
-                                                                    <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-[#D95D24] align-middle animate-pulse" />
-                                                                )}
-                                                            </div>
-                                                        ) : (
-                                                            <span className="whitespace-pre-wrap">{item.content}</span>
-                                                        )}
-                                                        {item.failed && (
-                                                            <p className="mt-1.5 font-mono text-[10px] text-[#D95D24]">
-                                                                Not sent — try again
-                                                            </p>
-                                                        )}
+                ) : (
+                    /* Calm Conversation Stream Floating Over the Interactive ASCII Background */
+                    <div className="min-h-0 w-full flex-1 overflow-y-auto px-5 pb-4 pt-12 sm:px-8">
+                        <div className="mx-auto max-w-2xl space-y-5">
+                            {messages.slice(-40).map((item, index) => {
+                                const isUser = item.role === 'user';
+                                return (
+                                    <motion.div
+                                        key={`${item.role}-${item.id || index}`}
+                                        initial={{ opacity: 0, y: 6 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ duration: 0.16 }}
+                                        className={isUser ? 'flex justify-end' : 'flex justify-start'}
+                                    >
+                                        <div className={`max-w-[88%] ${isUser ? 'text-right' : 'w-full'}`}>
+                                            {isUser ? (
+                                                <div
+                                                    className={`inline-block border border-[#D95D24]/45 bg-[#120B07]/85 px-4 py-2.5 text-left text-[14px] leading-relaxed text-[#F2EFE9] backdrop-blur-[3px] ${
+                                                        item.pending ? 'opacity-65' : ''
+                                                    }`}
+                                                >
+                                                    <span className="whitespace-pre-wrap">{item.content}</span>
+                                                    {item.failed && (
+                                                        <p className="mt-1 font-mono text-[10px] text-[#D95D24]">
+                                                            Could not send — try again
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <div className="border-l-2 border-[#D95D24]/60 bg-[#070606]/78 px-4 py-3 backdrop-blur-[3px]">
+                                                    <div className="assistant-message text-[14.5px] leading-[1.7] text-[#F2EFE9]">
+                                                        <ReactMarkdown>{cleanAssistantText(item.content)}</ReactMarkdown>
+                                                        {item.streaming && <span className="ascii-cursor ml-1" />}
                                                     </div>
 
-                                                    {/* Quick contextual section opener chips when AI touched a module */}
-                                                    {!isUser && Array.isArray(item.relatedSections) && item.relatedSections.length > 0 && (
-                                                        <div className="flex flex-wrap gap-1.5">
+                                                    {Array.isArray(item.relatedSections) && item.relatedSections.length > 0 && (
+                                                        <div className="mt-3 flex flex-wrap gap-2">
                                                             {item.relatedSections.map((secKey) => {
                                                                 const secMeta = SECTION_META[secKey];
                                                                 if (!secMeta) return null;
-                                                                const SecIcon = secMeta.icon;
                                                                 return (
                                                                     <button
                                                                         key={secKey}
                                                                         type="button"
                                                                         onClick={() => openSection(secKey)}
-                                                                        className="inline-flex items-center gap-1.5 rounded-full border border-[#D95D24]/35 bg-[#1A1410] px-2.5 py-1 font-mono text-[10px] text-[#E07A48] transition-colors hover:border-[#D95D24] hover:bg-[#D95D24]/20 hover:text-[#F2EFE9]"
+                                                                        className="border border-[#D95D24]/55 bg-[#120B07]/90 px-3 py-1 font-mono text-[11px] text-[#FF944D] transition-colors hover:bg-[#D95D24] hover:text-[#060606]"
                                                                     >
-                                                                        <SecIcon size={11} />
-                                                                        <span>Open {secMeta.label}</span>
+                                                                        Open {secMeta.label} →
                                                                     </button>
                                                                 );
                                                             })}
                                                         </div>
                                                     )}
                                                 </div>
-                                            </motion.div>
-                                        );
-                                    })}
-
-                                    {loading && !messages.some((m) => m.streaming) && (
-                                        <div className="flex items-center gap-3">
-                                            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-[#D95D24]/30 bg-[#161616]">
-                                                <SpiderMark size={18} state="thinking" animateEntrance={false} />
-                                            </div>
-                                            <div className="flex items-center gap-2 rounded-2xl border border-[#F2EFE9]/10 bg-[#161616] px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.16em] text-[#D95D24]">
-                                                <span className="h-1.5 w-1.5 rounded-full bg-[#D95D24] animate-pulse" />
-                                                <span>S.P.I.D.E.Y thinking...</span>
-                                            </div>
+                                            )}
                                         </div>
-                                    )}
-                                    <div ref={conversationEndRef} />
+                                    </motion.div>
+                                );
+                            })}
+
+                            {loading && !messages.some((m) => m.streaming) && (
+                                <div className="inline-block border-l-2 border-[#D95D24] bg-[#070606]/78 px-4 py-2 font-mono text-xs text-[#CFC9BF] backdrop-blur-[3px]">
+                                    Thinking<span className="ascii-cursor ml-1.5" />
                                 </div>
                             )}
+                            <div ref={conversationEndRef} />
                         </div>
-                    )}
+                    </div>
+                )}
 
-                    {/* 2. Single Persistent Unified 3D Core (Hero Center when idle -> Compact Floating Dock above composer when active) */}
-                    {!orbitMode && (
-                        <div
-                            className={`flex flex-col items-center justify-center transition-all duration-300 ${
-                                isHero ? 'flex-1 px-4 py-6' : 'shrink-0 px-4 pt-2 pb-1'
-                            }`}
-                        >
-                            {/* Hero Brand Header (only in idle hero state — exact Hedwig calm aesthetic) */}
-                            {isHero && (
+                {/* SINGLE CLEAN BOTTOM CHATBAR — Triggers Satisfying Ripples on Every Keystroke */}
+                <div className="relative z-20 w-full shrink-0 px-4 pb-5 pt-2 sm:px-6 sm:pb-7">
+                    <div className="relative mx-auto w-full max-w-2xl">
+                        {/* Quiet Slash Command Popover */}
+                        <AnimatePresence>
+                            {slashSuggestions.length > 0 && (
                                 <motion.div
-                                    initial={{ opacity: 0, y: -8 }}
+                                    initial={{ opacity: 0, y: 6 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    className="mb-2 flex flex-col items-center text-center"
+                                    exit={{ opacity: 0, y: 4 }}
+                                    className="ascii-frame absolute bottom-full left-0 right-0 z-30 mb-2 bg-[#090807]/95 p-1.5 shadow-2xl backdrop-blur-md"
                                 >
-                                    <div className="flex items-center gap-2.5">
-                                        <SpiderMark size={30} state={brainState} />
-                                        <h1 className="text-2xl font-semibold tracking-[0.22em] text-[#F2EFE9] sm:text-3xl">
-                                            S.P.I.D.E.Y
-                                        </h1>
-                                    </div>
-                                    <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.24em] text-[#9C968E]">
-                                        Neural Focus Workspace
-                                    </p>
+                                    {slashSuggestions.map((item) => (
+                                        <button
+                                            key={item.cmd}
+                                            type="button"
+                                            onClick={() => {
+                                                executeSlashCommand(item);
+                                                textareaRef.current?.focus();
+                                            }}
+                                            className="flex w-full items-center justify-between px-3 py-2 text-left text-xs transition-colors hover:bg-[#D95D24]/16"
+                                        >
+                                            <span className="font-mono font-medium text-[#D95D24]">{item.cmd}</span>
+                                            <span className="text-[#8E867D]">{item.desc}</span>
+                                        </button>
+                                    ))}
                                 </motion.div>
                             )}
+                        </AnimatePresence>
 
-                            {/* Floating Toast Reply when chatting while inside a Section Card */}
+                        <form
+                            onSubmit={handleSendSubmit}
+                            className="flex items-center gap-2 border border-[#F2EFE9]/16 bg-[#090807]/85 px-3.5 py-2 backdrop-blur-md transition-colors focus-within:border-[#D95D24]"
+                        >
+                            <textarea
+                                ref={textareaRef}
+                                value={prompt}
+                                onChange={handlePromptChange}
+                                onKeyDown={handleComposerKeyDown}
+                                rows={1}
+                                maxLength={2000}
+                                placeholder="Ask ORBIT anything… or type /"
+                                className="max-h-28 min-h-[34px] flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-relaxed text-[#F2EFE9] outline-none placeholder:text-[#7D756C]"
+                                disabled={!chatId}
+                            />
+
+                            <SpeakToggle
+                                speakEnabled={voice.speakEnabled}
+                                engineReady={voice.engineReady}
+                                onToggle={voice.toggleSpeak}
+                                error={voice.error}
+                            />
+
+                            <StopButton
+                                state={isVoiceActive ? 'speaking' : 'idle'}
+                                onStop={handleVoiceStop}
+                            />
+
+                            <LiveButton
+                                active={liveOpen || voiceSession.isLiveActive}
+                                state={voiceSession.state}
+                                onClick={toggleLiveMode}
+                                disabled={!chatId || loading}
+                            />
+
+                            <button
+                                type="submit"
+                                disabled={loading || !prompt.trim() || !chatId}
+                                className="h-9 shrink-0 border border-[#D95D24] bg-[#D95D24] px-4 font-mono text-xs font-semibold text-[#060606] transition-colors hover:bg-[#E86B30] disabled:opacity-30"
+                                aria-label="Send message"
+                            >
+                                Send
+                            </button>
+                        </form>
+
+                        {(error || voiceSession.error) && (
+                            <p className="mt-2 text-center font-mono text-[11px] text-[#D95D24]">
+                                {error || voiceSession.error}
+                            </p>
+                        )}
+                    </div>
+                </div>
+            </main>
+
+            {/* CALM FLOATING POP-UP OVERLAY FOR ANY SECTION OPENED VIA CHAT */}
+            <AnimatePresence>
+                {activeSection && !orbitMode && (
+                    <div className="fixed inset-0 z-30 flex items-center justify-center p-3 sm:p-6">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => openSection(null)}
+                            className="fixed inset-0 bg-black/75 backdrop-blur-[3px]"
+                        />
+                        <div className="relative z-10 flex max-h-[86dvh] w-full max-w-4xl flex-col">
+                            {/* Subtle reply toast if S.P.I.D.E.Y speaks while pop-up is open */}
                             <AnimatePresence>
-                                {!isHero && activeSection && sectionReplyToast && (
+                                {sectionReplyToast && (
                                     <motion.div
-                                        initial={{ opacity: 0, y: 8 }}
+                                        initial={{ opacity: 0, y: -6 }}
                                         animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: 6 }}
-                                        className="mb-2 flex max-w-xl items-start gap-2.5 rounded-xl border border-[#D95D24]/35 bg-[#181412]/95 px-3.5 py-2 text-xs text-[#F2EFE9] shadow-lg backdrop-blur-md"
+                                        exit={{ opacity: 0, y: -4 }}
+                                        className="mb-2.5 flex items-start justify-between gap-3 border border-[#D95D24]/50 bg-[#0B0A09] px-4 py-2.5 text-xs text-[#F2EFE9]"
                                     >
-                                        <Sparkles size={13} className="mt-0.5 shrink-0 text-[#D95D24]" />
                                         <p className="line-clamp-2 flex-1 leading-relaxed">{sectionReplyToast}</p>
                                         <button
                                             type="button"
                                             onClick={() => setSectionReplyToast(null)}
-                                            className="text-[#9C968E] hover:text-[#F2EFE9]"
-                                            aria-label="Dismiss reply preview"
+                                            className="font-mono text-[11px] text-[#8E867D] hover:text-[#F2EFE9]"
                                         >
-                                            <X size={12} />
+                                            ×
                                         </button>
                                     </motion.div>
                                 )}
                             </AnimatePresence>
 
-                            {/* The ONE persistent 3D Spidey + Neural Link Core */}
-                            <div
-                                className={`relative flex items-center justify-center transition-all duration-300 ${
-                                    isHero
-                                        ? 'flex-col'
-                                        : 'flex-row gap-3'
-                                }`}
-                            >
-                                <div
-                                    className={`relative rounded-full transition-all duration-300 ease-out ${
-                                        isHero
-                                            ? 'h-[260px] w-[260px] sm:h-[310px] sm:w-[310px]'
-                                            : 'h-[66px] w-[66px]'
-                                    } ${
-                                        isVoiceActive || brainState === 'listening'
-                                            ? 'ring-1 ring-[#D95D24]/50 shadow-[0_0_40px_rgba(217,93,36,0.22)]'
-                                            : ''
-                                    }`}
-                                >
-                                    <SpideyNeuralCoreCanvas
-                                        variant={isHero ? 'hero' : 'docked'}
-                                        className="h-full w-full"
-                                        onClick={() => {
-                                            brain?.triggerPulse?.(1.3);
-                                            if (voiceSession.state !== 'idle') {
-                                                voiceSession.stopSession();
-                                            }
-                                        }}
-                                    />
-                                </div>
-
-                                {/* Voice / Neural Status Caption */}
-                                <div className={isHero ? 'mt-2 text-center' : 'max-w-[260px] text-left sm:max-w-md'}>
-                                    <p
-                                        className={`font-mono text-[11px] transition-colors ${
-                                            spacePttHeld || voiceSession.state !== 'idle' || loading
-                                                ? 'text-[#E07A48]'
-                                                : 'text-[#9C968E]/80'
-                                        }`}
-                                    >
-                                        {voiceSession.transcript && voiceSession.state !== 'idle'
-                                            ? `“${voiceSession.transcript}”`
-                                            : voiceCaption}
-                                    </p>
-                                </div>
-                            </div>
-
-                            {/* Hero Starter Prompts (clean minimal pills) */}
-                            {isHero && (
-                                <div className="mt-5 flex max-w-xl flex-wrap items-center justify-center gap-2">
-                                    {STARTER_PROMPTS.map((starter) => (
-                                        <button
-                                            key={starter.label}
-                                            type="button"
-                                            onClick={() => submitPrompt(starter.label)}
-                                            disabled={loading || !chatId}
-                                            className="rounded-full border border-[#F2EFE9]/12 bg-[#161616]/90 px-3.5 py-1.5 text-xs text-[#D5CFC6] transition-all hover:border-[#D95D24]/70 hover:bg-[#1E1612] hover:text-[#F2EFE9] disabled:opacity-40"
-                                        >
-                                            {starter.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
+                            <SectionCanvasCard
+                                key={activeSection}
+                                sectionId={activeSection}
+                                onClose={() => openSection(null)}
+                                onAskSpidey={(q) => {
+                                    openSection(null);
+                                    submitPrompt(q);
+                                }}
+                            />
                         </div>
-                    )}
+                    </div>
+                )}
+            </AnimatePresence>
 
-                    {/* 3. Bottom Floating Composer Bar */}
-                    {!orbitMode && (
-                        <div className="relative shrink-0 px-3 pb-3 pt-1 sm:px-6 sm:pb-5">
-                            <div className="relative mx-auto w-full max-w-2xl">
-                                {/* Slash Command Popover */}
-                                <AnimatePresence>
-                                    {slashSuggestions.length > 0 && (
-                                        <motion.div
-                                            initial={{ opacity: 0, y: 6 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            exit={{ opacity: 0, y: 4 }}
-                                            className="absolute bottom-full left-0 right-0 mb-2 overflow-hidden rounded-xl border border-[#F2EFE9]/14 bg-[#161616]/98 p-1.5 shadow-2xl backdrop-blur-xl"
-                                        >
-                                            {slashSuggestions.map((item) => (
-                                                <button
-                                                    key={item.cmd}
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setPrompt('');
-                                                        openSection(item.section);
-                                                        textareaRef.current?.focus();
-                                                    }}
-                                                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-xs transition-colors hover:bg-[#D95D24]/15"
-                                                >
-                                                    <span className="font-mono font-semibold text-[#E07A48]">{item.cmd}</span>
-                                                    <span className="text-[#9C968E]">{item.desc}</span>
-                                                </button>
-                                            ))}
-                                        </motion.div>
-                                    )}
-                                </AnimatePresence>
+            {/* LIVE MODE OVERLAY (Full-screen transparent ASCII HUD over living 3D terrain) */}
+            <AnimatePresence>
+                {liveOpen && !activeSection && !orbitMode && (
+                    <LiveOverlay
+                        state={voiceSession.state}
+                        isMuted={voiceSession.isMuted}
+                        transcript={voiceSession.transcript}
+                        reply={voiceSession.reply}
+                        turns={liveTurns}
+                        timing={voiceSession.timing}
+                        error={voiceSession.error}
+                        onToggleMute={voiceSession.toggleMute}
+                        onCommit={voiceSession.commitUtterance}
+                        onInterrupt={voiceSession.interrupt}
+                        onRetry={() => voiceSession.startSession('live', chatId)}
+                        onClose={stopLiveMode}
+                    />
+                )}
+            </AnimatePresence>
 
-                                <form
-                                    data-spidey-anchor="composer"
-                                    onSubmit={handleSendSubmit}
-                                    className="flex items-end gap-2 rounded-2xl border border-[#F2EFE9]/14 bg-[#161616]/95 p-2 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-colors focus-within:border-[#D95D24]/70"
+            {/* Discreet floating Live pill if user opened a section pop-up during Live Mode */}
+            <AnimatePresence>
+                {liveOpen && (activeSection || orbitMode) && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        className="fixed right-4 top-4 z-40 flex items-center gap-2 border border-[#D95D24] bg-[#0B0807]/92 px-3 py-1.5 font-mono text-[11px] backdrop-blur-md"
+                    >
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#D95D24]" />
+                        <span className="uppercase tracking-[0.12em] text-[#FFD4A8]">
+                            live · {voiceSession.isMuted ? 'muted' : voiceSession.state}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => openSection(null)}
+                            className="border border-[#F2EFE9]/16 px-2 py-0.5 text-[10px] uppercase text-[#CFC9BF] hover:border-[#D95D24] hover:text-[#F2EFE9]"
+                        >
+                            view
+                        </button>
+                        <button
+                            type="button"
+                            onClick={stopLiveMode}
+                            className="border border-[#D95D24]/70 bg-[#D95D24] px-2 py-0.5 text-[10px] font-semibold uppercase text-[#060606] hover:bg-[#E86B30]"
+                        >
+                            end
+                        </button>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ORBIT007 POP-UP OVERLAY (opened via /orbit) */}
+            <AnimatePresence>
+                {orbitMode && (
+                    <div className="fixed inset-0 z-30 flex items-center justify-center p-3 sm:p-6">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setOrbitMode(false)}
+                            className="fixed inset-0 bg-black/75 backdrop-blur-[3px]"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 6 }}
+                            className="ascii-frame relative z-10 flex h-[82dvh] w-full max-w-3xl flex-col bg-[#080807]"
+                        >
+                            <div className="flex items-center justify-between border-b border-[#F2EFE9]/10 px-5 py-3">
+                                <span className="font-mono text-xs uppercase tracking-[0.16em] text-[#D95D24]">
+                                    ORBIT007 Live Agent
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => setOrbitMode(false)}
+                                    className="font-mono text-xs text-[#8E867D] hover:text-[#F2EFE9]"
                                 >
-                                    <textarea
-                                        ref={textareaRef}
-                                        value={prompt}
-                                        onChange={(e) => setPrompt(e.target.value)}
-                                        onKeyDown={handleComposerKeyDown}
-                                        rows={1}
-                                        maxLength={2000}
-                                        placeholder={
-                                            activeSection
-                                                ? `Ask S.P.I.D.E.Y about ${SECTION_META[activeSection]?.label || 'this'} or type /chat...`
-                                                : 'Ask S.P.I.D.E.Y anything... or type /tasks, /habits'
-                                        }
-                                        className="max-h-28 min-h-[38px] flex-1 resize-none bg-transparent px-3 py-2 text-[13px] leading-relaxed text-[#F2EFE9] outline-none placeholder:text-[#9C968E]/60"
-                                        disabled={!chatId}
-                                    />
-
-                                    <StopButton
-                                        state={isVoiceActive ? 'speaking' : 'idle'}
-                                        onStop={handleVoiceStop}
-                                    />
-
-                                    <ListenButton
-                                        state={voiceSession.state}
-                                        cloudStt={voice.cloudStt}
-                                        onClick={() => {
-                                            window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
-                                            if (voiceSession.state !== 'idle') {
-                                                voiceSession.stopSession();
-                                            } else {
-                                                voiceSession.startSession('live', chatId);
-                                            }
-                                        }}
-                                        disabled={!chatId || loading}
-                                    />
-
-                                    <button
-                                        type="submit"
-                                        disabled={loading || !prompt.trim() || !chatId}
-                                        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-[#D95D24] bg-[#D95D24] text-[#111111] transition-colors hover:bg-[#C44E19] disabled:opacity-35"
-                                        aria-label="Send message"
-                                    >
-                                        <Send size={15} />
-                                    </button>
-                                </form>
-
-                                {(error || voiceSession.error) && (
-                                    <p className="mt-2 px-2 text-center text-xs text-[#D95D24]">
-                                        {error || voiceSession.error}
-                                    </p>
-                                )}
+                                    Close ×
+                                </button>
                             </div>
-                        </div>
-                    )}
-                </div>
-            </main>
-
-            {/* Free-Roaming 3D Spidey Companion (crawls on composer, hangs on navbar, animates while speaking) */}
-            <SpideyRoamerOverlay />
+                            <div className="min-h-0 flex-1">
+                                <OrbitAgentView activeChatId={chatId} />
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

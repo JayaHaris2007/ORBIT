@@ -56,7 +56,15 @@ _PAST_SECTION_LABELS = {"past", "completed", "archived", "previous", "ended", "c
 # Dash-separated detail lines (e.g. "Title — Date (Mode) — Details" or "Title - Details")
 _DASH_DETAIL_SPLIT = re.compile(r"\s+(?:—|–|--|-)\s+")
 _FRACTION_PATTERN = re.compile(r"\b(\d+)\s*/\s*(\d+)\b")
-_FILE_EXT_PATTERN = re.compile(r"\b([A-Za-z0-9_]+)\.(cpp|hpp|py|js|jsx|ts|tsx|java|json|md|sql|html|css)\b")
+_FILE_EXT_PATTERN = re.compile(
+    r"\b([A-Za-z0-9][A-Za-z0-9_-]*)\."
+    r"(?:cpp|hpp|cc|cxx|hh|c|h|py|pyw|ipynb|js|jsx|mjs|cjs|ts|tsx|java|kt|kts|"
+    r"go|rs|rb|php|cs|swift|dart|scala|lua|sql|json|yaml|yml|toml|xml|ini|cfg|"
+    r"md|txt|csv|tsv|html|htm|css|scss|sass|less|sh|bash|bat|cmd|ps1|"
+    r"pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|svg|ico|mp3|wav|ogg|mp4|webm|"
+    r"zip|tar|gz|db|sqlite3?|glb|gltf)\b(?![(\w])",
+    re.IGNORECASE,
+)
 _CPP_PATTERN = re.compile(r"\bC\+\+(?![A-Za-z0-9])")
 _CSHARP_PATTERN = re.compile(r"\bC#(?![A-Za-z0-9])")
 
@@ -81,8 +89,9 @@ def clean_text_for_speech(text: str) -> str:
     if not text:
         return ""
 
-    # 1. Drop reasoning blocks
+    # 1. Drop reasoning blocks and unwrap angle-bracket placeholders like <topic>
     text = _THINK_BLOCK.sub(" ", text)
+    text = re.sub(r"<([A-Za-z][A-Za-z0-9 _-]{0,30})>", r"\1", text)
 
     # 2. Strip code blocks completely, preserve inline code content
     text = _CODE_BLOCK.sub(" ", text)
@@ -98,21 +107,24 @@ def clean_text_for_speech(text: str) -> str:
     text = _TABLE_ROW_BORDER.sub(" ", text)
     text = text.replace("|", ", ")
 
-    # 5. Remove markdown structure
+    # 5. Strip file extensions before markdown emphasis strips underscores inside snake_case filenames
+    text = _FILE_EXT_PATTERN.sub(
+        lambda m: m.group(1).replace("_", " ").replace("-", " "),
+        text,
+    )
+
+    # 6. Remove markdown structure
     text = _HEADING.sub("", text)
     text = _BLOCKQUOTE.sub("", text)
     text = _BULLETS.sub("", text)
     text = _ORDERED_LIST.sub("", text)
+    text = re.sub(r"(?<=[A-Za-z0-9])_(?=[A-Za-z0-9])", " ", text)
     text = _EMPHASIS.sub("", text)
     text = _STRIKETHROUGH.sub("", text)
 
-    # 6. Currency, technical terms, and spoken math/symbols
+    # 7. Currency, technical terms, and spoken math/symbols
     text = _CPP_PATTERN.sub("C plus plus", text)
     text = _CSHARP_PATTERN.sub("C sharp", text)
-    text = _FILE_EXT_PATTERN.sub(
-        lambda m: f"{m.group(1).replace('_', ' ')} dot {m.group(2)}",
-        text,
-    )
     text = _FRACTION_PATTERN.sub(r"\1 out of \2", text)
     text = _RUPEE_AMOUNT.sub(_replace_rupee, text)
     text = _DOLLAR_AMOUNT.sub(r"\1 dollars", text)

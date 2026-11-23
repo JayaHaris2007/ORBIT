@@ -18,7 +18,7 @@ def _normalize_command(prompt: str) -> str:
     """Strip greetings, politeness, conversational lead-ins, and trailing punctuation."""
     normalized = re.sub(r"\s+", " ", prompt.strip()).rstrip(".!?")
     normalized = re.sub(
-        r"^(?:hey\s+|hi\s+|hello\s+)?(?:spidey|s\.p\.i\.d\.e\.y)[,\s]+",
+        r"^(?:hey\s+|hi\s+|hello\s+)?(?:orbit|spidey|s\.p\.i\.d\.e\.y)[,\s]+",
         "",
         normalized,
         flags=re.IGNORECASE,
@@ -168,7 +168,7 @@ def _web_search_reply(query: str) -> tuple[str, str]:
                 {
                     "role": "system",
                     "content": (
-                        "You are S.P.I.D.E.Y. Summarize web search results clearly in simple, everyday English. "
+                        "You are ORBIT. Summarize web search results clearly in simple, everyday English. "
                         "For each relevant result, give a short, plain-words summary (1-2 sentences) with the source name or link. "
                         "Ignore website navigation text or boilerplate. Do not invent facts outside the provided results."
                     ),
@@ -686,13 +686,26 @@ def _is_advice_question(normalized_prompt: str) -> bool:
     return bool(_ADVICE_PATTERN.search(normalized_prompt))
 
 
+_OTHER_DOMAIN_GUARD = re.compile(
+    r"\b(?:"
+    r"habits?|streaks?|routines?|"
+    r"reminders?|remind|alarms?|timers?|"
+    r"memor(?:y|ies)|notes?|"
+    r"learn\w*|stud(?:y|ying|ied|ies)|topics?|roadmaps?|lessons?|modules?|courses?|subjects?|"
+    r"code|coded|coding|folders?|links?|"
+    r"analytics?|telemetry|overview|briefing|summary|stats?|statistics|"
+    r"settings?|preferences?|theme|profile|"
+    r"xp|level|points?|achievements?|"
+    r"focus\s+more|improve|average|progress"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def _is_task_list_request(prompt: str) -> bool:
     normalized_prompt = _app()._normalize_command(prompt).lower()
-    # Habit, reminder, analytics, overview, and learning focus queries belong to their own handlers / LLM tools.
-    if re.search(
-        r"\b(?:habits?|reminders?|analytics?|telemetry|overview|roadmaps?|learning|study|focus\s+more|improve|average)\b",
-        normalized_prompt,
-    ):
+    # Habit, reminder, memory, analytics, overview, settings, and learning queries belong to their own handlers / LLM tools.
+    if _OTHER_DOMAIN_GUARD.search(normalized_prompt):
         return False
     if _app()._is_advice_question(normalized_prompt):
         return False
@@ -739,8 +752,10 @@ def _is_task_list_request(prompt: str) -> bool:
         normalized_prompt,
     )
     if not task_reference:
-        # Common shorthand such as “what's pending?” or “what are the
-        # pending to do?” still means the user's open task list.
+        # Shorthand such as "what's pending?", "show pending today", or "what's left to do?"
+        # Only match when there is NO explicit other-domain action verb like "to learn/study/read/watch/buy".
+        if re.search(r"\bto\s+(?!do\b|complete\b|finish\b)[a-z]+\b", normalized_prompt):
+            return False
         return bool(
             re.search(r"\b(?:what|which|show|list|check|tell me|any)\b", normalized_prompt)
             and re.search(
