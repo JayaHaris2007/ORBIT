@@ -30,6 +30,7 @@ def dummy_deps():
     deps.memory_store.create_task = MagicMock(return_value={"id": 1, "title": "Buy milk", "priority": "medium"})
     deps.create_reminder_unified = MagicMock(return_value={"id": "rem-1", "title": "Call John", "remind_at": "2026-11-02T10:00:00Z"})
     deps.run_learning_hook = lambda fn: None
+    deps.learning_schema_initialized = MagicMock(return_value=False)
     deps.live_reminders = MagicMock(return_value=[])
     deps.generate_response = MagicMock(return_value="Plain LLM fallback reply.")
     deps.token_budget = MagicMock(return_value=128)

@@ -32,6 +32,7 @@ def _dummy_deps() -> AgentDeps:
         return_value={"id": 1, "title": "Buy milk", "priority": "medium"}
     )
     deps.run_learning_hook = lambda fn: None
+    deps.learning_schema_initialized = MagicMock(return_value=False)
     deps.live_reminders = MagicMock(return_value=[])
     deps.token_budget = MagicMock(return_value=128)
     return deps

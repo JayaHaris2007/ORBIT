@@ -350,7 +350,7 @@ class SpideyBot(commands.Bot):
                             except Exception as e:
                                 LOGGER.debug("Server notification target resolution failed: %s", e)
 
-                        delivered = False  # noqa: must be before all branches
+                        delivered = False  # Must be initialized before all branches
                         if target and target.get("channel_id") and target.get("guild_id"):
                             guild_id = target["guild_id"]
                             channel_id = target["channel_id"]

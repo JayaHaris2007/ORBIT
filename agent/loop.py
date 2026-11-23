@@ -276,7 +276,8 @@ def _build_initial_messages(
             system_text += f"\n\nNotes from earlier conversations:\n{notes_text}"
 
     # Inject Hybrid Code RAG context when the user asks about their learning code/folders
-    if deps.learning_schema_initialized():
+    schema_init = getattr(deps, "learning_schema_initialized", None)
+    if callable(schema_init) and schema_init():
         try:
             from learning import code_rag
 
