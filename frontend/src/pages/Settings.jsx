@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth, useTheme } from '../context/AuthContext';
 import { useAppData } from '../context/AppDataContext';
 import { useNotifications } from '../hooks/useNotifications';
@@ -10,8 +10,20 @@ import {
     DEFAULT_GEMINI_MODEL,
     GEMINI_KEY_STORAGE,
     GEMINI_MODEL_STORAGE,
+    OLLAMA_MODEL_STORAGE,
     getGeminiConfig,
+    getOllamaModelConfig,
 } from '../services/api';
+
+const POPULAR_OLLAMA_MODELS = [
+    'qwen3.5:4b',
+    'llama3.2:3b',
+    'gemma3:4b',
+    'deepseek-r1:8b',
+    'qwen2.5-coder:7b',
+    'mistral:7b',
+    'phi4-mini',
+];
 
 function SettingBlock({ code, title, children }) {
     return (
@@ -94,9 +106,106 @@ const Settings = () => {
     const [showGeminiKey, setShowGeminiKey] = useState(false);
     const [hasSavedGeminiKey, setHasSavedGeminiKey] = useState(() => Boolean(getGeminiConfig().apiKey));
 
+    // Local Ollama Multi-Model Discovery, Hot-Swap & Pull State
+    const [ollamaReachable, setOllamaReachable] = useState(false);
+    const [ollamaModels, setOllamaModels] = useState([]);
+    const [activeOllamaModel, setActiveOllamaModel] = useState(() => getOllamaModelConfig() || 'qwen3.5:4b');
+    const [pullModelTag, setPullModelTag] = useState('');
+    const [isRefreshingModels, setIsRefreshingModels] = useState(true);
+    const [isPullingModel, setIsPullingModel] = useState(false);
+
     const showMessage = (type, text) => {
         setMessage({ type, text });
         setTimeout(() => setMessage({ type: '', text: '' }), 3200);
+    };
+
+    const applyOllamaModelsData = useCallback((data) => {
+        setOllamaReachable(Boolean(data.reachable));
+        setOllamaModels(data.models || []);
+        if (data.active_model) {
+            setActiveOllamaModel(data.active_model);
+            try {
+                localStorage.setItem(OLLAMA_MODEL_STORAGE, data.active_model);
+            } catch { /* ignore */ }
+        }
+    }, []);
+
+    const loadOllamaModels = useCallback(async () => {
+        setIsRefreshingModels(true);
+        try {
+            const data = await apiRequest('/api/ollama/models');
+            applyOllamaModelsData(data);
+        } catch {
+            setOllamaReachable(false);
+        } finally {
+            setIsRefreshingModels(false);
+        }
+    }, [applyOllamaModelsData]);
+
+    useEffect(() => {
+        let cancelled = false;
+        apiRequest('/api/ollama/models')
+            .then((data) => {
+                if (!cancelled) applyOllamaModelsData(data);
+            })
+            .catch(() => {
+                if (!cancelled) setOllamaReachable(false);
+            })
+            .finally(() => {
+                if (!cancelled) setIsRefreshingModels(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [applyOllamaModelsData]);
+
+    const handleSelectOllamaModel = async (nextModel) => {
+        const chosen = String(nextModel || '').trim();
+        if (!chosen) return;
+        setActiveOllamaModel(chosen);
+        try {
+            const res = await apiRequest('/api/ollama/select', {
+                method: 'POST',
+                body: JSON.stringify({ model: chosen, persist: true }),
+            });
+            const resolved = res.active_model || chosen;
+            setActiveOllamaModel(resolved);
+            if (Array.isArray(res.models)) setOllamaModels(res.models);
+            try {
+                localStorage.setItem(OLLAMA_MODEL_STORAGE, resolved);
+            } catch { /* ignore */ }
+            window.dispatchEvent(new CustomEvent('orbit:ollama_model_changed', { detail: { model: resolved } }));
+            showMessage('success', `Active Ollama model: ${resolved}`);
+        } catch (err) {
+            showMessage('error', err.message || 'Could not switch Ollama model.');
+        }
+    };
+
+    const handlePullOllamaModel = async (e) => {
+        e?.preventDefault?.();
+        const tag = pullModelTag.trim();
+        if (!tag || isPullingModel) return;
+        setIsPullingModel(true);
+        showMessage('success', `Pulling ${tag} from Ollama…`);
+        try {
+            const res = await apiRequest('/api/ollama/pull', {
+                method: 'POST',
+                body: JSON.stringify({ model: tag, select_after: true }),
+            });
+            const resolved = res.active_model || tag;
+            setActiveOllamaModel(resolved);
+            setPullModelTag('');
+            if (Array.isArray(res.models)) setOllamaModels(res.models);
+            try {
+                localStorage.setItem(OLLAMA_MODEL_STORAGE, resolved);
+            } catch { /* ignore */ }
+            window.dispatchEvent(new CustomEvent('orbit:ollama_model_changed', { detail: { model: resolved } }));
+            showMessage('success', `Pulled & activated ${resolved}.`);
+        } catch (err) {
+            showMessage('error', err.message || `Failed to pull ${tag}.`);
+        } finally {
+            setIsPullingModel(false);
+        }
     };
 
     const handleUpdateProfile = async (e) => {
@@ -350,14 +459,105 @@ const Settings = () => {
                 />
             </SettingBlock>
 
-            {/* AI Engine BYOK */}
+            {/* Local Ollama Universal Model Selector + Pull */}
             <section className="ascii-frame bg-[#0A0908]">
                 <div className="flex items-center justify-between border-b border-[#F2EFE9]/10 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.16em]">
                     <span className="text-[#8E867D]">
-                        <span className="text-[#D95D24]">02 //</span> AI Engine (Ollama / Gemini BYOK)
+                        <span className="text-[#D95D24]">02 //</span> Local Ollama Models (Supports All Models)
+                    </span>
+                    <span className={ollamaReachable ? 'text-[#D95D24]' : 'text-[#6E675F]'}>
+                        {ollamaReachable ? `● ollama:${activeOllamaModel}` : '○ ollama offline'}
+                    </span>
+                </div>
+
+                <div className="space-y-4 p-4">
+                    <p className="font-mono text-[11px] leading-relaxed text-[#8E867D]">
+                        Switch between any locally installed Ollama model instantly (Qwen, Llama, Gemma, DeepSeek-R1, Mistral, Phi, CodeLlama, custom GGUFs). Models without native tool-calling automatically adapt to context-injected streaming mode.
+                    </p>
+
+                    <div>
+                        <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.14em] text-[#8E867D]">
+                            <label htmlFor="ollama-model-select">Active Installed Model</label>
+                            <button
+                                type="button"
+                                onClick={loadOllamaModels}
+                                disabled={isRefreshingModels}
+                                className="text-[#CFC9BF] transition-colors hover:text-[#D95D24] disabled:opacity-40"
+                            >
+                                {isRefreshingModels ? '[scanning…]' : '[↻ refresh]'}
+                            </button>
+                        </div>
+
+                        <select
+                            id="ollama-model-select"
+                            value={activeOllamaModel}
+                            onChange={(e) => handleSelectOllamaModel(e.target.value)}
+                            className="w-full border border-[#F2EFE9]/16 bg-[#060606] px-3 py-2 font-mono text-xs text-[#F2EFE9] outline-none focus:border-[#D95D24]"
+                        >
+                            {!ollamaModels.some((m) => m.name === activeOllamaModel) && (
+                                <option value={activeOllamaModel}>{activeOllamaModel} (configured)</option>
+                            )}
+                            {ollamaModels
+                                .filter((m) => !m.is_embedding)
+                                .map((m) => {
+                                    const metaParts = [m.name];
+                                    if (m.parameter_size) metaParts.push(m.parameter_size);
+                                    if (m.quantization_level) metaParts.push(m.quantization_level);
+                                    if (m.loaded) metaParts.push('[LOADED]');
+                                    return (
+                                        <option key={m.name} value={m.name}>
+                                            {metaParts.join(' · ')}
+                                        </option>
+                                    );
+                                })}
+                        </select>
+                    </div>
+
+                    <form onSubmit={handlePullOllamaModel} className="space-y-2.5 border-t border-[#F2EFE9]/10 pt-3.5">
+                        <label className="block font-mono text-[10px] uppercase tracking-[0.14em] text-[#8E867D]">
+                            Pull or Switch to Any Ollama Library Tag
+                        </label>
+                        <div className="flex gap-2">
+                            <input
+                                type="text"
+                                value={pullModelTag}
+                                onChange={(e) => setPullModelTag(e.target.value)}
+                                placeholder="e.g. llama3.2:3b, gemma3:4b, deepseek-r1:8b, mistral"
+                                className="min-w-0 flex-1 border border-[#F2EFE9]/16 bg-[#060606] px-3 py-2 font-mono text-xs text-[#F2EFE9] outline-none placeholder:text-[#5C564F] focus:border-[#D95D24]"
+                            />
+                            <button
+                                type="submit"
+                                disabled={!pullModelTag.trim() || isPullingModel}
+                                className="shrink-0 border border-[#D95D24] bg-[#D95D24] px-3.5 py-2 font-mono text-[11px] font-semibold uppercase text-[#060606] transition-colors hover:bg-[#E86B30] disabled:opacity-40"
+                            >
+                                {isPullingModel ? '[pulling…]' : '[pull & use]'}
+                            </button>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 pt-0.5 font-mono text-[10px]">
+                            {POPULAR_OLLAMA_MODELS.map((preset) => (
+                                <button
+                                    key={preset}
+                                    type="button"
+                                    onClick={() => setPullModelTag(preset)}
+                                    className="border border-[#F2EFE9]/12 bg-[#060606] px-2 py-0.5 text-[#8E867D] transition-colors hover:border-[#D95D24] hover:text-[#F2EFE9]"
+                                >
+                                    {preset}
+                                </button>
+                            ))}
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            {/* Cloud AI Engine BYOK */}
+            <section className="ascii-frame bg-[#0A0908]">
+                <div className="flex items-center justify-between border-b border-[#F2EFE9]/10 px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.16em]">
+                    <span className="text-[#8E867D]">
+                        <span className="text-[#D95D24]">03 //</span> Optional Cloud Upgrade (Gemini BYOK)
                     </span>
                     <span className={hasSavedGeminiKey ? 'text-[#D95D24]' : 'text-[#8E867D]'}>
-                        {hasSavedGeminiKey ? `gemini:${geminiModel}` : 'local:ollama'}
+                        {hasSavedGeminiKey ? `gemini:${geminiModel}` : `ollama:${activeOllamaModel}`}
                     </span>
                 </div>
 
@@ -426,7 +626,7 @@ const Settings = () => {
             </section>
 
             {/* Danger Zone */}
-            <SettingBlock code="03" title="Danger Zone">
+            <SettingBlock code="04" title="Danger Zone">
                 <SettingRow
                     label="Delete All Database Data"
                     hint="Wipe tasks, habits, chats, reminders, memories, and roadmaps"

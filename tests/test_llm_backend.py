@@ -267,3 +267,97 @@ def test_eager_fails_llm_when_ollama_unavailable(monkeypatch):
         REGISTRY.status = orig_status
         REGISTRY.errors = orig_errors
         REGISTRY.metrics = orig_metrics
+
+
+def test_universal_ollama_model_adapts_when_tools_and_think_unsupported(monkeypatch, temp_db):
+    """Any Ollama model lacking native 'think' or 'tools' support auto-adapts and answers cleanly."""
+    from agent.confirm import ConfirmationManager
+    from agent.loop import _MODELS_WITHOUT_THINK, _MODELS_WITHOUT_TOOLS, run_agent_loop
+
+    model_tag = "gemma3-custom:4b"
+    _MODELS_WITHOUT_THINK.discard(model_tag)
+    _MODELS_WITHOUT_TOOLS.discard(model_tag)
+    monkeypatch.setattr(app, "OLLAMA_MODEL", model_tag)
+
+    seen_payloads = []
+
+    def mock_urlopen(req, timeout=None):
+        body = json.loads(req.data.decode("utf-8"))
+        seen_payloads.append(body)
+        if "think" in body:
+            err_fp = io.BytesIO(b'{"error":"model does not support thinking"}')
+            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, err_fp)
+        if "tools" in body:
+            err_fp = io.BytesIO(b'{"error":"registry.ollama.ai/library/gemma3:4b does not support tools"}')
+            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, err_fp)
+        return _make_mock_response({
+            "message": {
+                "role": "assistant",
+                "content": "<thought>Internal thought</thought>Hello from Gemma3 without native tools!",
+            },
+            "done_reason": "stop",
+        })
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    res = run_agent_loop(
+        prompt="Explain binary search",
+        chat_id="default",
+        history=[],
+        memories=[],
+        channel="web",
+        deps=app.agent_deps,
+        confirm_mgr=ConfirmationManager(),
+    )
+    assert res.reply == "Hello from Gemma3 without native tools!"
+    assert model_tag in _MODELS_WITHOUT_THINK
+    assert model_tag in _MODELS_WITHOUT_TOOLS
+    assert len(seen_payloads) == 3
+
+    _MODELS_WITHOUT_THINK.discard(model_tag)
+    _MODELS_WITHOUT_TOOLS.discard(model_tag)
+
+
+def test_ollama_models_list_and_hot_swap_select(monkeypatch, temp_db):
+    """GET /api/ollama/models lists all chat models and POST /api/ollama/select hot-swaps active model."""
+    def mock_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "/api/tags" in url:
+            return _make_mock_response({
+                "models": [
+                    {
+                        "name": "qwen3.5:4b",
+                        "size": 2600000000,
+                        "details": {"parameter_size": "4.3B", "quantization_level": "Q4_K_M", "family": "qwen3"},
+                    },
+                    {
+                        "name": "deepseek-r1:8b",
+                        "size": 4900000000,
+                        "details": {"parameter_size": "8.0B", "quantization_level": "Q4_K_M", "family": "llama"},
+                    },
+                    {
+                        "name": "nomic-embed-text:latest",
+                        "size": 274000000,
+                        "details": {"families": ["nomic-bert"]},
+                    },
+                ]
+            })
+        if "/api/ps" in url:
+            return _make_mock_response({"models": [{"name": "deepseek-r1:8b"}]})
+        return _make_mock_response({})
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    monkeypatch.setattr(app, "OLLAMA_MODEL", "qwen3.5:4b")
+
+    client = TestClient(app.app)
+    res = client.get("/api/ollama/models")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["reachable"] is True
+    assert "qwen3.5:4b" in data["chat_models"]
+    assert "deepseek-r1:8b" in data["chat_models"]
+    assert "nomic-embed-text:latest" not in data["chat_models"]
+
+    sel = client.post("/api/ollama/select", json={"model": "deepseek-r1:8b", "persist": False})
+    assert sel.status_code == 200
+    assert sel.json()["active_model"] == "deepseek-r1:8b"
+    assert app.OLLAMA_MODEL == "deepseek-r1:8b"

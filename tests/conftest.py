@@ -14,7 +14,15 @@ def temp_db(tmp_path):
     """Provide a fresh, isolated MemoryStore in a temporary directory."""
     db_file = tmp_path / "test_assistant.db"
     store = MemoryStore(db_file)
-    return store
+    try:
+        yield store
+    finally:
+        store.close()
+        try:
+            from learning import schema as learning_schema
+            learning_schema.close_connections()
+        except Exception:
+            pass
 
 
 @pytest.fixture(autouse=True)

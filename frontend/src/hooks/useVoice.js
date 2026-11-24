@@ -75,19 +75,6 @@ export function useVoice() {
         };
     }, []);
 
-    const toggleSpeak = useCallback(async () => {
-        const next = !speakEnabled;
-        setSpeakEnabled(next);
-        localStorage.setItem(SPEAK_LOCAL_KEY, next ? '1' : '0');
-        try {
-            const data = await updateVoiceSettings({ speak_enabled: next });
-            setSpeakEnabled(Boolean(data.speak_enabled));
-            setEngineReady(Boolean(data.engine_ready));
-        } catch (err) {
-            console.error('Failed to update speak setting on backend:', err);
-        }
-    }, [speakEnabled]);
-
     const stop = useCallback(() => {
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
@@ -99,6 +86,23 @@ export function useVoice() {
         setIsSpeaking(false);
         stopVoiceTurn().catch(() => {});
     }, [audioQueue]);
+
+    const toggleSpeak = useCallback(async () => {
+        const next = !speakEnabled;
+        setSpeakEnabled(next);
+        localStorage.setItem(SPEAK_LOCAL_KEY, next ? '1' : '0');
+        if (!next) {
+            window.dispatchEvent(new CustomEvent('spidey:audio_stop'));
+            stop();
+        }
+        try {
+            const data = await updateVoiceSettings({ speak_enabled: next });
+            setSpeakEnabled(Boolean(data.speak_enabled));
+            setEngineReady(Boolean(data.engine_ready));
+        } catch (err) {
+            console.error('Failed to update speak setting on backend:', err);
+        }
+    }, [speakEnabled, stop]);
 
     const speak = useCallback(
         async (text, options = {}) => {

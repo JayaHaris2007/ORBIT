@@ -30,21 +30,24 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
     const nextExpectedAudioSeqRef = useRef(null);
 
     const getWsUrl = () => {
-        const token = (import.meta.env.VITE_ORBIT_TOKEN || '').trim();
-        const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
         if (import.meta.env.VITE_SPIDEY_API_BASE_URL) {
             const base = import.meta.env.VITE_SPIDEY_API_BASE_URL.replace(/^http/, 'ws').replace(/\/$/, '');
-            return `${base}/ws/voice${tokenQuery}`;
+            return `${base}/ws/voice`;
         }
         if (typeof window !== 'undefined') {
             const host = window.location.hostname || '127.0.0.1';
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             if (window.location.port === '3000') {
-                return `${protocol}//${host}:8000/ws/voice${tokenQuery}`;
+                return `${protocol}//${host}:8000/ws/voice`;
             }
-            return `${protocol}//${window.location.host}/ws/voice${tokenQuery}`;
+            return `${protocol}//${window.location.host}/ws/voice`;
         }
-        return `ws://127.0.0.1:8000/ws/voice${tokenQuery}`;
+        return 'ws://127.0.0.1:8000/ws/voice';
+    };
+
+    const getWsProtocols = () => {
+        const token = (import.meta.env.VITE_ORBIT_TOKEN || '').trim();
+        return token ? ['orbit-v1', `orbit-token.${token}`] : undefined;
     };
 
     const cleanupAudioCapture = useCallback(() => {
@@ -194,8 +197,8 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                 workletNodeRef.current = workletNode;
                 source.connect(workletNode);
 
-                // 4. Connect WebSocket
-                const ws = new WebSocket(getWsUrl());
+                // 4. Connect WebSocket (passes token via subprotocol so it never enters server URL logs)
+                const ws = new WebSocket(getWsUrl(), getWsProtocols());
                 ws.binaryType = 'arraybuffer';
                 wsRef.current = ws;
 
@@ -268,9 +271,16 @@ export function useVoiceSession({ onTranscript = null, onReply = null, audioQueu
                                 const now = performance.now();
                                 timingRef.current.transcript = now;
                                 onTranscriptRef.current?.(data.text);
+                            } else if (data.type === 'reply_partial') {
+                                setReply(data.text);
+                                if (!timingRef.current.firstSentence && timingRef.current.transcript) {
+                                    timingRef.current.firstSentence = performance.now();
+                                }
                             } else if (data.type === 'reply') {
                                 setReply(data.text);
-                                timingRef.current.firstSentence = performance.now();
+                                if (!timingRef.current.firstSentence) {
+                                    timingRef.current.firstSentence = performance.now();
+                                }
                                 onReplyRef.current?.(data.text, data);
                             } else if (data.type === 'audio') {
                                 nextExpectedAudioSeqRef.current = data;

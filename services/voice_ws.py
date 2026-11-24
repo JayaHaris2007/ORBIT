@@ -63,7 +63,18 @@ class ConnectionManager:
         self.active: list[WebSocket] = []
 
     async def connect(self, ws: WebSocket) -> None:
-        await ws.accept()
+        headers = getattr(ws, "headers", None)
+        raw_proto = (
+            headers.get("sec-websocket-protocol")
+            if hasattr(headers, "get") and type(headers).__name__ != "AsyncMock"
+            else None
+        )
+        proto_header = raw_proto if isinstance(raw_proto, str) else ""
+        subproto = "orbit-v1" if any(p.strip() == "orbit-v1" for p in proto_header.split(",")) else None
+        if subproto:
+            await ws.accept(subprotocol=subproto)
+        else:
+            await ws.accept()
         self.active.append(ws)
 
     def disconnect(self, ws: WebSocket) -> None:
@@ -138,6 +149,8 @@ async def process_agent_turn(
     on_stream_reset=None,
     on_stream_done=None,
 ) -> dict:
+    from services.turn_orchestrator import execute_turn, execute_turn_stream
+
     user_message = (user_message or "").strip()
     if not user_message:
         raise ValueError("Message cannot be empty.")
@@ -146,101 +159,35 @@ async def process_agent_turn(
     target_chat = chat_id or session_id or _app().DEFAULT_CHAT_ID
     _app()._ensure_chat_exists(target_chat)
 
-    from voice.text_clean import summarize_for_speech
+    if on_token is not None:
+        outcome = await execute_turn_stream(
+            user_message,
+            target_chat,
+            channel="agent",
+            on_token=on_token,
+            on_stream_reset=on_stream_reset,
+            on_stream_done=on_stream_done,
+            stream_local_tokens=False,
+        )
+    else:
+        outcome = await execute_turn(
+            user_message,
+            target_chat,
+            channel="agent",
+        )
 
-    # 1. Pending confirmation check (before adding user_message so context stays clean)
-    handled, conf_reply, conf_actions = _app().confirmation_mgr.check_and_handle(target_chat, user_message, _app().agent_deps)
-    if handled:
-        _app().memory_store.add_message(target_chat, "user", user_message)
-        _app().memory_store.add_message(target_chat, "assistant", conf_reply)
-        audio_url = await _app().generate_tts_url(conf_reply)
-        _app()._cleanup_tts()
-        return {
-            "type": "agent_response",
-            "text": conf_reply,
-            "spoken_text": summarize_for_speech(conf_reply),
-            "audio_url": audio_url,
-            "reminders": _app()._live_reminders(),
-            "history": _app().memory_store.get_messages(target_chat)[-20:],
-            "ui_actions": conf_actions,
-        }
-
-    # 2. Rules-first command handling
-    reply_text: str | None = None
-    ui_actions: list[dict[str, Any]] = []
-    nav_page: str | None = None
-    local_error_msg: str | None = None
-    try:
-        cmd_result = await asyncio.to_thread(_app()._handle_local_command, user_message, target_chat)
-        if cmd_result:
-            reply_text = cmd_result[0]
-            nav_page, ui_actions = _app()._build_local_command_ui_actions(cmd_result[1])
-    except ValueError as cmd_err:
-        logging.getLogger("orbit007").info("Local command raised ValueError (%s) for %r", cmd_err, user_message)
-        local_error_msg = str(cmd_err)
-    except Exception:
-        logging.getLogger("orbit007").exception("Local command handling failed for %r", user_message)
-
-    _app().memory_store.add_message(target_chat, "user", user_message)
-
-    # 3. Route to native tool loop
-    if reply_text is None:
-        raw_history = _app().memory_store.get_messages(target_chat)[-11:]
-        if raw_history and raw_history[-1].get("role") == "user" and raw_history[-1].get("content") == user_message:
-            raw_history = raw_history[:-1]
-        history = raw_history[-10:]
-        memories = _app()._memories_for_prompt(user_message)
-        try:
-            if on_token is not None:
-                agent_result = await _app().respond_with_tools_stream(
-                    user_message,
-                    target_chat,
-                    history,
-                    memories,
-                    "agent",
-                    on_token=on_token,
-                    on_stream_reset=on_stream_reset,
-                )
-            else:
-                agent_result = await asyncio.to_thread(
-                    _app().respond_with_tools,
-                    user_message,
-                    target_chat,
-                    history,
-                    memories,
-                    "agent",
-                )
-            reply_text = agent_result.reply
-            ui_actions = agent_result.ui_actions
-            nav_page = next((act.get("page") for act in ui_actions if act.get("type") == "navigate"), None)
-        except Exception as exc:
-            logging.getLogger("orbit007").warning("Agent turn failed: %s", exc)
-            if local_error_msg:
-                reply_text = local_error_msg
-            elif _app().is_gemini_active():
-                reply_text = f"I'm having trouble reaching the Gemini API: {exc}"
-            else:
-                reply_text = "I'm having trouble connecting to my local language model right now. Please make sure Ollama is running (`ollama serve`)."
-        if on_stream_done is not None:
-            res = on_stream_done()
-            if asyncio.iscoroutine(res):
-                await res
-
-    _app().memory_store.add_message(target_chat, "assistant", reply_text)
-
-    # 4. Audio generation: per-reply unique audio file
-    audio_url = await _app().generate_tts_url(reply_text)
+    audio_url = await _app().generate_tts_url(outcome.response)
     _app()._cleanup_tts()
 
     return {
         "type": "agent_response",
-        "text": reply_text,
-        "spoken_text": summarize_for_speech(reply_text),
+        "text": outcome.response,
+        "spoken_text": outcome.spoken_response,
         "audio_url": audio_url,
         "reminders": _app()._live_reminders(),
         "history": _app().memory_store.get_messages(target_chat)[-20:],
-        "navigate": nav_page,
-        "ui_actions": ui_actions,
+        "navigate": outcome.navigate,
+        "ui_actions": outcome.ui_actions,
     }
 
 

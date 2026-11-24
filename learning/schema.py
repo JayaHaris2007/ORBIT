@@ -12,6 +12,7 @@ any query runs. Tests call ``init()`` with a temporary database instead.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Literal
@@ -106,6 +107,22 @@ class CodeRagQueryIn(BaseModel):
     limit: int = Field(default=5, ge=1, le=15)
 
 _database_path: Path | None = None
+_local = threading.local()
+_open_connections: list[sqlite3.Connection] = []
+_conn_lock = threading.Lock()
+
+
+def close_connections() -> None:
+    """Close all cached thread-local SQLite connections for the learning schema."""
+    with _conn_lock:
+        conns = list(_open_connections)
+        _open_connections.clear()
+    _local.__dict__.clear()
+    for conn in conns:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def is_initialized() -> bool:
@@ -116,7 +133,10 @@ def is_initialized() -> bool:
 def init(database_path: Path) -> None:
     """Point the learning module at a database and create its tables."""
     global _database_path
-    _database_path = Path(database_path)
+    new_path = Path(database_path)
+    if _database_path is not None and _database_path != new_path:
+        close_connections()
+    _database_path = new_path
     _database_path.parent.mkdir(parents=True, exist_ok=True)
     with connect() as connection:
         connection.executescript(
@@ -275,25 +295,53 @@ def database_path() -> Path:
     return _database_path
 
 
-@contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
+def _get_thread_connection() -> sqlite3.Connection:
+    db_path = database_path()
+    db_key = str(db_path)
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    conn_key: str | None = getattr(_local, "db_key", None)
+    if conn is not None and conn_key == db_key:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except sqlite3.ProgrammingError:
+            conn = None
+
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
     connection = sqlite3.connect(
-        database_path(),
+        db_path,
         check_same_thread=False,
         timeout=30.0,
     )
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA busy_timeout = 30000")
+    _local.conn = connection
+    _local.db_key = db_key
+    with _conn_lock:
+        _open_connections.append(connection)
+    return connection
+
+
+@contextmanager
+def connect() -> Iterator[sqlite3.Connection]:
+    connection = _get_thread_connection()
+    in_tx_before = connection.in_transaction
     try:
         yield connection
-        connection.commit()
+        if not in_tx_before:
+            connection.commit()
     except Exception:
-        connection.rollback()
+        if not in_tx_before:
+            connection.rollback()
         raise
-    finally:
-        connection.close()
 
 
 def row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:

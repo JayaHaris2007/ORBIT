@@ -742,8 +742,18 @@ def launch_gui() -> None:
         else:
             widget = tk.Entry(box, textvariable=var, width=width, bg="#0F0F0F", fg=TEXT, insertbackground=TEXT, relief="flat")
         widget.pack(pady=(2, 0))
+        return widget
 
-    add_field(cfg_frame, "OLLAMA MODEL", model_var, ["qwen3.5:4b", "qwen2.5:7b", "llama3.2:3b"], width=16)
+    default_model_presets = [
+        "qwen3.5:4b",
+        "llama3.2:3b",
+        "gemma3:4b",
+        "deepseek-r1:8b",
+        "qwen2.5-coder:7b",
+        "mistral:7b",
+        "phi4-mini",
+    ]
+    model_combo = add_field(cfg_frame, "OLLAMA MODEL", model_var, default_model_presets, width=18)
     add_field(cfg_frame, "LLM BACKEND", llm_var, ["ollama", "gemini"], width=10)
     add_field(cfg_frame, "TTS ENGINE", tts_var, ["phonon", "sapi"], width=10)
     add_field(cfg_frame, "COACH (MIN)", coach_min_var, width=6)
@@ -916,8 +926,16 @@ def launch_gui() -> None:
 
                     if key == "ollama":
                         models = info.get("models") or []
+                        if models:
+                            merged_models = list(dict.fromkeys([*models, *default_model_presets]))
+                            if list(model_combo["values"]) != merged_models:
+                                model_combo["values"] = merged_models
                         target = model_var.get().strip()
-                        has_model = any(m == target or m.startswith(f"{target}:") for m in models)
+                        t_base = target[:-7] if target.endswith(":latest") else target
+                        has_model = any(
+                            m == target or m == f"{t_base}:latest" or m == t_base
+                            for m in models
+                        )
                         meta_txt = (
                             f"Models: {len(models)} ({'model ready' if has_model else f'missing {target}'})"
                             if st in ("running", "external")

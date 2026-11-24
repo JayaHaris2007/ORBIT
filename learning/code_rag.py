@@ -323,6 +323,77 @@ _CONCEPT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ..
         (r"O\s*\(\s*(?:1|n|log\s*n|n\s*log\s*n|n\^2|2\^n)\s*\)",),
         ("big o", "complexity", "time complexity"),
     ),
+    (
+        "react_components_hooks",
+        ("component", "components", "hook", "hooks", "usestate", "useeffect", "jsx", "tsx", "props", "context"),
+        (
+            r"\buse(?:State|Effect|Memo|Callback|Ref|Context|Reducer)\s*\(",
+            r"export\s+(?:default\s+)?function\s+[A-Z]\w*\s*\(",
+        ),
+        ("react", "components", "hooks", "state management", "jsx", "props"),
+    ),
+    (
+        "typescript_types_interfaces",
+        ("interface", "interfaces", "type_alias", "generics_ts", "enum_ts", "types_ts"),
+        (
+            r"\binterface\s+[A-Z]\w*\s*(?:<[^>]+>)?\s*\{",
+            r"\btype\s+[A-Z]\w*\s*(?:<[^>]+>)?\s*=",
+        ),
+        ("typescript", "interfaces", "type annotations", "type system"),
+    ),
+    (
+        "async_promises_concurrency",
+        ("async", "await", "promise", "promises", "future", "coroutine", "coroutines", "goroutine", "tokio"),
+        (
+            r"\basync\s+(?:def|function)\b",
+            r"\bawait\s+\w+",
+            r"\bnew\s+Promise\s*\(",
+            r"\bgo\s+[A-Za-z_]\w*\s*\(",
+            r"#\[tokio::main\]",
+        ),
+        ("async", "promises", "async/await", "coroutines", "goroutines"),
+    ),
+    (
+        "rest_api_http_routing",
+        ("api", "rest", "router", "endpoint", "endpoints", "fastapi", "express", "middleware", "http", "fetch"),
+        (
+            r"@(?:app|router)\.(?:get|post|put|delete|patch)\s*\(",
+            r"\bapp\.(?:get|post|put|delete|use)\s*\(",
+            r"\bfetch\s*\(\s*[`'\"/]",
+        ),
+        ("rest api", "http", "routing", "endpoints", "middleware", "fastapi", "express"),
+    ),
+    (
+        "database_sql_queries",
+        ("sql", "query", "queries", "schema", "migration", "join", "sqlite", "postgres", "database", "orm"),
+        (
+            r"\bSELECT\b[\s\S]{1,120}\bFROM\b",
+            r"\bCREATE\s+TABLE\b",
+            r"\b(?:INNER|LEFT|RIGHT)\s+JOIN\b",
+            r"\bINSERT\s+INTO\b",
+        ),
+        ("sql", "databases", "joins", "queries", "schema design", "sqlite", "postgresql"),
+    ),
+    (
+        "rust_ownership_borrowing",
+        ("ownership", "borrowing", "lifetime", "lifetimes", "trait", "traits", "pattern_matching", "cargo"),
+        (
+            r"\bfn\s+[a-z_]\w*\s*(?:<[^>]+>)?\s*\([^)]*&(?:mut\s+)?[A-Za-z_]",
+            r"\bimpl(?:\s*<[^>]+>)?\s+[A-Z]\w*",
+            r"\bmatch\s+[a-z_]\w*\s*\{",
+        ),
+        ("ownership", "borrowing", "lifetimes", "traits", "pattern matching", "rust"),
+    ),
+    (
+        "python_decorators_generators",
+        ("decorator", "decorators", "generator", "generators", "comprehension", "dataclass", "context_manager"),
+        (
+            r"^\s*@[A-Za-z_][\w.]*",
+            r"\byield\s+(?:from\s+)?\S+",
+            r"\[[^\]]+\bfor\s+[a-z_]\w*\s+in\s+[^\]]+\]",
+        ),
+        ("decorators", "generators", "comprehensions", "dataclasses", "pythonic"),
+    ),
 )
 
 _RAG_CONCEPT_EXPANSIONS: tuple[set[str], ...] = (
@@ -335,6 +406,9 @@ _RAG_CONCEPT_EXPANSIONS: tuple[set[str], ...] = (
     {"array", "arrays", "vector", "subarray", "matrix", "string", "strings"},
     {"class", "classes", "object", "objects", "oop", "struct", "constructor", "inheritance", "polymorphism"},
     {"linked", "list", "node", "stack", "queue", "tree", "bst", "graph", "bfs", "dfs", "dp"},
+    {"react", "hook", "hooks", "usestate", "useeffect", "component", "jsx", "tsx", "typescript", "interface"},
+    {"async", "await", "promise", "api", "rest", "endpoint", "router", "http", "sql", "query", "join"},
+    {"rust", "ownership", "borrow", "trait", "impl", "match", "go", "goroutine", "decorator", "generator"},
 )
 
 
@@ -429,12 +503,23 @@ def _extract_symbols(text: str, language: str) -> list[str]:
             if fn not in {"if", "for", "while", "switch", "catch"} and fn not in symbols:
                 symbols.append(fn)
     elif language in {"javascript", "typescript"}:
-        for fn in re.findall(r"\b(?:function|class)\s+([A-Za-z_$]\w*)", text):
+        for fn in re.findall(r"\b(?:function|class|interface|type)\s+([A-Za-z_$]\w*)", text):
             if fn not in symbols:
                 symbols.append(fn)
         for fn in re.findall(r"\bconst\s+([A-Za-z_$]\w*)\s*=\s*(?:async\s*)?\(", text):
             if fn not in symbols:
                 symbols.append(fn)
+    elif language == "rust":
+        for sym in re.findall(r"\b(?:fn|struct|enum|trait)\s+([A-Za-z_]\w*)", text):
+            if sym not in symbols:
+                symbols.append(sym)
+    elif language == "go":
+        for sym in re.findall(r"\bfunc\s+(?:\([^)]+\)\s*)?([A-Za-z_]\w*)", text):
+            if sym not in symbols:
+                symbols.append(sym)
+        for sym in re.findall(r"\btype\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b", text):
+            if sym not in symbols:
+                symbols.append(sym)
 
     return symbols[:20]
 
@@ -1035,23 +1120,34 @@ def sync_roadmap_folder(
                 conn.execute("DELETE FROM learning_code_files WHERE id = ?", (old_row["id"],))
                 files_removed += 1
 
-        # Analyze ONLY new or changed files (fast hash check skips unchanged files!)
+        # Analyze ONLY new or changed files (fast mtime+size check avoids reading unchanged files!)
         for rel_path, fpath in discovered_rels.items():
             old = existing_rows.get(rel_path)
-            raw_bytes = fpath.read_bytes()
-            quick_hash = hashlib.sha256(raw_bytes).hexdigest()
             ext = fpath.suffix.lower()
             has_compiled = any(
                 fpath.with_suffix(c_ext).exists()
                 for c_ext in COMPILED_ARTIFACT_EXTS
             ) if ext in {".cpp", ".cc", ".cxx", ".c", ".java"} else False
 
-            unchanged = (
+            stat = fpath.stat()
+            mod_iso = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+            stat_unchanged = (
                 old is not None
-                and old["content_hash"] == quick_hash
+                and old["file_size"] == stat.st_size
+                and old["modified_at"] == mod_iso
                 and bool(old["has_compiled_artifact"]) == bool(has_compiled)
             )
-            if unchanged:
+            if not stat_unchanged and old is not None:
+                raw_bytes = fpath.read_bytes()
+                quick_hash = hashlib.sha256(raw_bytes).hexdigest()
+                unchanged = (
+                    old["content_hash"] == quick_hash
+                    and bool(old["has_compiled_artifact"]) == bool(has_compiled)
+                )
+            else:
+                unchanged = stat_unchanged
+
+            if unchanged and old is not None:
                 try:
                     cached_concepts = json.loads(old.get("concepts_json") or "[]")
                 except Exception:
@@ -1060,6 +1156,20 @@ def sync_roadmap_folder(
                     cached_symbols = json.loads(old.get("symbols_json") or "[]")
                 except Exception:
                     cached_symbols = []
+                stem_lower = fpath.stem.lower()
+                stem_tokens = set(_slug_tokens(fpath.stem))
+                rel_tokens = set(_slug_tokens(rel_path))
+                fname_concepts = [
+                    cid
+                    for cid, fname_keys, _, _ in _CONCEPT_RULES
+                    if any(
+                        (k in stem_tokens) or (k in rel_tokens) or _phrase_in_text(k, stem_lower)
+                        for k in fname_keys
+                    )
+                ]
+                code_only = [c for c in cached_concepts if c not in fname_concepts] or (
+                    cached_concepts if old["file_state"] == "practiced" else []
+                )
                 analyzed_files.append(
                     {
                         "id": old["id"],
@@ -1074,8 +1184,8 @@ def sync_roadmap_folder(
                         "has_compiled_artifact": bool(old["has_compiled_artifact"]),
                         "file_state": old["file_state"],
                         "concepts": cached_concepts,
-                        "code_concepts": cached_concepts if old["file_state"] == "practiced" else [],
-                        "filename_concepts": [],
+                        "code_concepts": cached_concepts if old["file_state"] == "practiced" else code_only,
+                        "filename_concepts": fname_concepts,
                         "symbols": cached_symbols,
                         "summary": old["summary"],
                         "modified_at": old["modified_at"],
@@ -1168,20 +1278,6 @@ def sync_roadmap_folder(
         }
 
         if need_recheck_topics:
-            # Re-hydrate full analysis only when needed for accurate matching across remaining files
-            full_analyzed: list[dict[str, Any]] = []
-            for f_info in analyzed_files:
-                if f_info.get("is_changed"):
-                    full_analyzed.append(f_info)
-                else:
-                    fpath = Path(f_info["abs_path"])
-                    if fpath.exists():
-                        re_info = analyze_source_file(fpath, root)
-                        re_info["id"] = f_info["id"]
-                        re_info["is_changed"] = False
-                        full_analyzed.append(re_info)
-            analyzed_files = full_analyzed
-
             matched_topic_ids: set[int] = set()
             for topic in topics:
                 t_id = int(topic["id"])

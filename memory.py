@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
-import logging
 import sqlite3
+import threading
 
 LOGGER = logging.getLogger("spidey.memory")
 import uuid
@@ -41,14 +42,32 @@ def _now() -> str:
 
 class MemoryStore:
     def __init__(self, database_path: Path) -> None:
-        self.database_path = database_path
+        self.database_path = Path(database_path)
         self._embedder = None
         self._embedding_warning_printed = False
+        self._local = threading.local()
+        self._open_connections: list[sqlite3.Connection] = []
+        self._conn_lock = threading.Lock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
-    @contextmanager
-    def connect(self):
+    def _get_thread_connection(self) -> sqlite3.Connection:
+        db_key = str(self.database_path)
+        conn: sqlite3.Connection | None = getattr(self._local, "conn", None)
+        conn_key: str | None = getattr(self._local, "db_key", None)
+        if conn is not None and conn_key == db_key:
+            try:
+                conn.execute("SELECT 1")
+                return conn
+            except sqlite3.ProgrammingError:
+                conn = None
+
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
         connection = sqlite3.connect(
             self.database_path,
             check_same_thread=False,
@@ -57,15 +76,38 @@ class MemoryStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = NORMAL")
         connection.execute("PRAGMA busy_timeout = 30000")
+        self._local.conn = connection
+        self._local.db_key = db_key
+        with self._conn_lock:
+            self._open_connections.append(connection)
+        return connection
+
+    def close(self) -> None:
+        """Close all cached thread-local SQLite connections."""
+        with self._conn_lock:
+            conns = list(self._open_connections)
+            self._open_connections.clear()
+        self._local.__dict__.clear()
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    @contextmanager
+    def connect(self):
+        connection = self._get_thread_connection()
+        in_tx_before = connection.in_transaction
         try:
             yield connection
-            connection.commit()
+            if not in_tx_before:
+                connection.commit()
         except Exception:
-            connection.rollback()
+            if not in_tx_before:
+                connection.rollback()
             raise
-        finally:
-            connection.close()
 
     def initialize(self) -> None:
         with self.connect() as connection:

@@ -111,7 +111,7 @@ from agent.gemini import (  # noqa: E402, F401
     reset_request_gemini_config,
     set_request_gemini_config,
 )
-from agent.loop import AgentResult, run_agent_loop, run_agent_loop_stream  # noqa: E402, F401
+from agent.loop import AgentResult, close_http_sessions, run_agent_loop, run_agent_loop_stream  # noqa: E402, F401
 from learning import classifier as learning_classifier  # noqa: E402, F401
 from learning import code_rag as learning_code_rag  # noqa: E402, F401
 from learning import nudges as learning_nudges  # noqa: E402, F401
@@ -130,6 +130,7 @@ from voice.config import purge_voice_tmp  # noqa: E402
 from voice.router import (  # noqa: E402
     router as voice_router,
     set_chat_handler as set_voice_chat_handler,
+    set_stream_chat_handler as set_voice_stream_chat_handler,
     ws_router as voice_ws_router,
 )
 
@@ -205,10 +206,14 @@ from services.llm import (  # noqa: E402, F401
     _validate_generate_payload,
     ensure_model_loaded,
     generate_response,
+    get_active_ollama_model,
+    list_ollama_models,
+    reset_request_ollama_model,
     resolve_short_follow_up,
     respond_with_tools,
     respond_with_tools_stream,
     select_generation_context,
+    set_request_ollama_model,
 )
 from services.productivity_parsers import (  # noqa: E402, F401
     _complete_habit,
@@ -374,6 +379,9 @@ async def lifespan(_: FastAPI):
 
         if reminder_scheduler.running:
             reminder_scheduler.shutdown(wait=False)
+        await close_http_sessions()
+        memory_store.close()
+        learning_schema.close_connections()
         release_model_process_lock()
 
 
@@ -383,9 +391,9 @@ cors_origins_env = os.environ.get(
 )
 ORBIT_CORS_ORIGINS = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
 API_TOKEN = os.environ.get("ORBIT_API_TOKEN", "").strip()
-_OPEN_PATHS = ("/health", "/api/health", "/tts/")
+_OPEN_PATHS = ("/health", "/api/health")
 
-app = FastAPI(title="ORBIT007 Backend", lifespan=lifespan)
+app = FastAPI(title="ORBIT Backend", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ORBIT_CORS_ORIGINS,
@@ -395,21 +403,61 @@ app.add_middleware(
 )
 
 
+def _extract_http_token(request: Request) -> str:
+    header_tok = (request.headers.get("x-orbit-token") or "").strip()
+    if header_tok:
+        return header_tok
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return ""
+
+
+def _safe_header_str(headers: Any, key: str) -> str:
+    if not isinstance(headers, dict) and not hasattr(headers, "get"):
+        return ""
+    # Avoid creating unawaited coroutines when tests pass AsyncMock WebSockets
+    if type(headers).__name__ == "AsyncMock":
+        return ""
+    val = headers.get(key)
+    return val.strip() if isinstance(val, str) else ""
+
+
+def _extract_ws_token(ws: WebSocket) -> str:
+    headers = getattr(ws, "headers", None)
+    header_tok = _safe_header_str(headers, "x-orbit-token")
+    if header_tok:
+        return header_tok
+    proto_header = _safe_header_str(headers, "sec-websocket-protocol")
+    for part in proto_header.split(","):
+        item = part.strip()
+        if item.startswith("orbit-token."):
+            return item[len("orbit-token.") :]
+    qp = getattr(ws, "query_params", None)
+    if type(qp).__name__ == "AsyncMock" or not hasattr(qp, "get"):
+        return ""
+    tok = qp.get("token", "")
+    return tok if isinstance(tok, str) else ""
+
+
 @app.middleware("http")
 async def gemini_context_middleware(request: Request, call_next):
     api_key = request.headers.get("x-gemini-api-key")
     model = request.headers.get("x-gemini-model")
+    ollama_model = request.headers.get("x-ollama-model")
     tokens = set_request_gemini_config(api_key, model)
+    ollama_tok = set_request_ollama_model(ollama_model)
     try:
         return await call_next(request)
     finally:
+        reset_request_ollama_model(ollama_tok)
         reset_request_gemini_config(tokens)
 
 
 @app.middleware("http")
 async def token_guard(request: Request, call_next):
     if API_TOKEN and request.method != "OPTIONS" and not request.url.path.startswith(_OPEN_PATHS):
-        supplied = request.headers.get("x-orbit-token", "")
+        supplied = _extract_http_token(request)
         if not secrets.compare_digest(supplied, API_TOKEN):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
@@ -418,7 +466,7 @@ async def token_guard(request: Request, call_next):
 async def ws_authorized(ws: WebSocket) -> bool:
     if not API_TOKEN:
         return True
-    ok = secrets.compare_digest(ws.query_params.get("token", ""), API_TOKEN)
+    ok = secrets.compare_digest(_extract_ws_token(ws), API_TOKEN)
     if not ok:
         await ws.close(code=1008)
     return ok
@@ -484,13 +532,46 @@ from routers.productivity import (  # noqa: E402, F401
 
 
 async def _voice_chat_turn(prompt: str, chat_id: str | None = None):
-    payload = {"prompt": prompt}
+    payload = {"prompt": prompt, "channel": "voice"}
     if chat_id:
         payload["chat_id"] = chat_id
     return await generate(payload)
 
 
+async def _voice_chat_turn_stream(
+    prompt: str,
+    chat_id: str | None = None,
+    on_token=None,
+    on_stream_reset=None,
+):
+    from services.turn_orchestrator import execute_turn_stream
+
+    payload = {"prompt": prompt}
+    if chat_id:
+        payload["chat_id"] = chat_id
+    validated_prompt, _max_tokens, resolved_chat_id = _validate_generate_payload(payload)
+    outcome = await execute_turn_stream(
+        validated_prompt,
+        resolved_chat_id,
+        channel="voice",
+        on_token=on_token,
+        on_stream_reset=on_stream_reset,
+        stream_local_tokens=False,
+    )
+    return {
+        "response": outcome.response,
+        "spoken_response": outcome.spoken_response,
+        "chat_id": outcome.chat_id,
+        "messages": memory_store.get_messages(outcome.chat_id),
+        "provider": outcome.provider,
+        "navigate": outcome.navigate,
+        "ui_actions": outcome.ui_actions,
+    }
+
+
 set_voice_chat_handler(_voice_chat_turn)
+_voice_chat_turn._is_default_voice_handler = True  # type: ignore[attr-defined]
+set_voice_stream_chat_handler(_voice_chat_turn_stream)
 app.include_router(research_router)
 app.include_router(learning_router)
 app.include_router(voice_router)

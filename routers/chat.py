@@ -11,7 +11,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from voice.text_clean import summarize_for_speech
+from services.turn_orchestrator import execute_turn, execute_turn_stream
 
 router = APIRouter(tags=["chat"])
 
@@ -34,87 +34,18 @@ def _app():
 async def generate(payload: dict[str, Any] = Body(...)):
     a = _app()
     prompt, _max_new_tokens, chat_id = a._validate_generate_payload(payload)
+    channel = str(payload.get("channel") or "web")
 
     try:
-        # 1. Pending confirmation check
-        handled, conf_reply, conf_actions = a.confirmation_mgr.check_and_handle(chat_id, prompt, a.agent_deps)
-        if handled:
-            a.memory_store.add_message(chat_id, "user", prompt.strip())
-            a.memory_store.add_message(chat_id, "assistant", conf_reply)
-            return {
-                "response": conf_reply,
-                "spoken_response": summarize_for_speech(conf_reply),
-                "chat_id": chat_id,
-                "messages": a.memory_store.get_messages(chat_id),
-                "provider": "local-confirmation",
-                "navigate": None,
-                "ui_actions": conf_actions,
-            }
-
-        # 2. Rules-first command handling
-        local_error_msg: str | None = None
-        try:
-            command = a._handle_local_command(prompt, chat_id)
-        except ValueError as cmd_err:
-            a.LOGGER.info("Local command raised ValueError (%s) for %r", cmd_err, prompt)
-            command = None
-            local_error_msg = str(cmd_err)
-        a.LOGGER.info("[route] %s <- %r", "local:" + command[1] if command else "tools/llm", prompt)
-        if command is not None:
-            response, provider = command
-            a.memory_store.add_message(chat_id, "user", prompt.strip())
-            a.memory_store.add_message(chat_id, "assistant", response)
-            nav, ui_actions = a._build_local_command_ui_actions(provider)
-            return {
-                "response": response,
-                "spoken_response": summarize_for_speech(response),
-                "chat_id": chat_id,
-                "messages": a.memory_store.get_messages(chat_id),
-                "provider": provider.split(":", 1)[0],
-                "navigate": nav,
-                "ui_actions": ui_actions,
-            }
-
-        # 3. Native tools / LLM response
-        a.memory_store.add_message(chat_id, "user", prompt.strip())
-        context = a.memory_store.build_context(chat_id, None, prompt)
-        model_prompt = a.resolve_short_follow_up(prompt, context)
-        memories = a._memories_for_prompt(model_prompt)
-        history = list(context)
-        if history and history[-1].get("role") == "user" and history[-1].get("content") == prompt.strip():
-            history.pop()
-        try:
-            agent_result = await asyncio.to_thread(
-                a.respond_with_tools,
-                model_prompt,
-                chat_id,
-                history,
-                memories,
-                "web",
-            )
-            response = agent_result.reply
-            ui_actions = agent_result.ui_actions
-            provider = agent_result.provider
-        except RuntimeError as err:
-            logging.getLogger("orbit007").warning("LLM generation failed in chat route: %s", err)
-            if a.is_gemini_active():
-                response = local_error_msg or f"Gemini API error: {err}"
-                provider = "gemini"
-            else:
-                response = local_error_msg or "I'm having trouble connecting to my local language model right now. Please make sure Ollama is running (`ollama serve`)."
-                provider = "ollama"
-            ui_actions = []
-
-        a.memory_store.add_message(chat_id, "assistant", response)
-        nav_page = next((act.get("page") for act in reversed(ui_actions) if act.get("type") == "navigate"), None)
+        outcome = await execute_turn(prompt, chat_id, channel=channel)
         return {
-            "response": response,
-            "spoken_response": summarize_for_speech(response),
-            "chat_id": chat_id,
-            "messages": a.memory_store.get_messages(chat_id),
-            "provider": provider,
-            "navigate": nav_page,
-            "ui_actions": ui_actions,
+            "response": outcome.response,
+            "spoken_response": outcome.spoken_response,
+            "chat_id": outcome.chat_id,
+            "messages": a.memory_store.get_messages(outcome.chat_id),
+            "provider": outcome.provider,
+            "navigate": outcome.navigate,
+            "ui_actions": outcome.ui_actions,
         }
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
@@ -128,110 +59,40 @@ async def generate_stream(payload: dict[str, Any] = Body(...)):
 
     async def event_generator():
         try:
-            # 1. Pending confirmation check
-            handled, conf_reply, conf_actions = a.confirmation_mgr.check_and_handle(chat_id, prompt, a.agent_deps)
-            if handled:
-                a.memory_store.add_message(chat_id, "user", prompt.strip())
-                a.memory_store.add_message(chat_id, "assistant", conf_reply)
-                done_payload = {
-                    "type": "done",
-                    "response": conf_reply,
-                    "spoken_response": summarize_for_speech(conf_reply),
-                    "chat_id": chat_id,
-                    "messages": a.memory_store.get_messages(chat_id),
-                    "provider": "local-confirmation",
-                    "navigate": None,
-                    "ui_actions": conf_actions,
-                }
-                yield f"data: {json.dumps(done_payload)}\n\n"
-                return
-
-            # 2. Rules-first command handling
-            local_error_msg: str | None = None
-            try:
-                command = await asyncio.to_thread(a._handle_local_command, prompt, chat_id)
-            except ValueError as cmd_err:
-                a.LOGGER.info("Local command raised ValueError (%s) for %r", cmd_err, prompt)
-                command = None
-                local_error_msg = str(cmd_err)
-            a.LOGGER.info("[route] %s <- %r", "local:" + command[1] if command else "tools/llm", prompt)
-            if command is not None:
-                response, provider = command
-                a.memory_store.add_message(chat_id, "user", prompt.strip())
-                a.memory_store.add_message(chat_id, "assistant", response)
-                nav, ui_actions = a._build_local_command_ui_actions(provider)
-                done_payload = {
-                    "type": "done",
-                    "response": response,
-                    "spoken_response": summarize_for_speech(response),
-                    "chat_id": chat_id,
-                    "messages": a.memory_store.get_messages(chat_id),
-                    "provider": provider.split(":", 1)[0],
-                    "navigate": nav,
-                    "ui_actions": ui_actions,
-                }
-                yield f"data: {json.dumps(done_payload)}\n\n"
-                return
-
-            # 3. Native tools / LLM streaming response
-            a.memory_store.add_message(chat_id, "user", prompt.strip())
-            context = a.memory_store.build_context(chat_id, None, prompt)
-            model_prompt = a.resolve_short_follow_up(prompt, context)
-            memories = a._memories_for_prompt(model_prompt)
-            history = list(context)
-            if history and history[-1].get("role") == "user" and history[-1].get("content") == prompt.strip():
-                history.pop()
-
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            streamed_llm = False
 
             async def _on_token(text: str) -> None:
+                nonlocal streamed_llm
                 if text:
+                    streamed_llm = True
                     await queue.put({"type": "token", "text": text})
 
             async def _on_reset() -> None:
                 await queue.put({"type": "stream_reset"})
 
-            async def _run() -> None:
-                try:
-                    agent_result = await a.respond_with_tools_stream(
-                        model_prompt,
-                        chat_id,
-                        history,
-                        memories,
-                        "web",
-                        on_token=_on_token,
-                        on_stream_reset=_on_reset,
-                    )
-                    response = agent_result.reply
-                    ui_actions = agent_result.ui_actions
-                    provider = agent_result.provider
-                except RuntimeError as err:
-                    logging.getLogger("orbit007").warning("LLM streaming failed in chat route: %s", err)
-                    if a.is_gemini_active():
-                        response = local_error_msg or f"Gemini API error: {err}"
-                        provider = "gemini"
-                    else:
-                        response = (
-                            local_error_msg
-                            or "I'm having trouble connecting to my local language model right now. Please make sure Ollama is running (`ollama serve`)."
-                        )
-                        provider = "ollama"
-                    ui_actions = []
-                    await queue.put({"type": "stream_reset"})
-                    await queue.put({"type": "token", "text": response})
-
+            async def _on_done() -> None:
                 await queue.put({"type": "stream_done"})
-                a.memory_store.add_message(chat_id, "assistant", response)
-                nav_page = next((act.get("page") for act in reversed(ui_actions) if act.get("type") == "navigate"), None)
+
+            async def _run() -> None:
+                outcome = await execute_turn_stream(
+                    prompt,
+                    chat_id,
+                    channel="web",
+                    on_token=_on_token,
+                    on_stream_reset=_on_reset,
+                    on_stream_done=_on_done,
+                    stream_local_tokens=False,
+                )
                 await queue.put({
                     "type": "done",
-                    "response": response,
-                    "spoken_response": summarize_for_speech(response),
-                    "chat_id": chat_id,
-                    "messages": a.memory_store.get_messages(chat_id),
-                    "provider": provider,
-                    "navigate": nav_page,
-                    "ui_actions": ui_actions,
+                    "response": outcome.response,
+                    "spoken_response": outcome.spoken_response,
+                    "chat_id": outcome.chat_id,
+                    "messages": a.memory_store.get_messages(outcome.chat_id),
+                    "provider": outcome.provider,
+                    "navigate": outcome.navigate,
+                    "ui_actions": outcome.ui_actions,
                 })
                 await queue.put(None)
 
@@ -282,6 +143,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
     # Never accept API keys via URL query parameters (prevents leaking keys into server/proxy logs)
     ws_gemini_key: str | None = None
     ws_gemini_model: str | None = None
+    ws_ollama_model: str | None = None
     try:
         await websocket.send_json({
             "type": "connected",
@@ -302,6 +164,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
         async def _run_and_send_turn(text: str) -> None:
             await websocket.send_json({"type": "status", "state": "thinking"})
             tokens = a.set_request_gemini_config(ws_gemini_key, ws_gemini_model)
+            ollama_tok = a.set_request_ollama_model(ws_ollama_model)
             try:
                 result = await a.process_agent_turn(
                     text,
@@ -312,6 +175,7 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                     on_stream_done=_ws_on_done,
                 )
             finally:
+                a.reset_request_ollama_model(ollama_tok)
                 a.reset_request_gemini_config(tokens)
             await websocket.send_json(result)
 
@@ -359,9 +223,18 @@ async def websocket_agent_endpoint(websocket: WebSocket):
                 if "gemini_model" in payload:
                     raw_gmodel = payload.get("gemini_model")
                     ws_gemini_model = raw_gmodel.strip() if isinstance(raw_gmodel, str) and raw_gmodel.strip() else None
+                if "ollama_model" in payload:
+                    raw_omodel = payload.get("ollama_model")
+                    ws_ollama_model = raw_omodel.strip() if isinstance(raw_omodel, str) and raw_omodel.strip() else None
 
                 if msg_type == "ping":
                     await websocket.send_json({"type": "pong"})
+                    continue
+                elif msg_type == "set_ollama_model":
+                    await websocket.send_json({
+                        "type": "ollama_model_set",
+                        "model": ws_ollama_model or a.OLLAMA_MODEL,
+                    })
                     continue
                 elif msg_type == "set_gemini_config":
                     await websocket.send_json({

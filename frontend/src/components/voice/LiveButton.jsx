@@ -3,6 +3,7 @@ export default function LiveButton({
     state = 'idle',
     onClick,
     disabled = false,
+    compact = false,
 }) {
     const isBusy = state === 'connecting' || state === 'transcribing' || state === 'thinking';
 
@@ -14,7 +15,9 @@ export default function LiveButton({
             aria-pressed={active}
             aria-label={active ? 'End Live Mode (Ctrl+Space)' : 'Start Live Mode (Ctrl+Space)'}
             title={active ? 'End Live Mode (Ctrl+Space)' : 'Start Live Mode (Ctrl+Space)'}
-            className={`relative flex h-9 shrink-0 items-center justify-center gap-1.5 border px-2.5 font-mono text-[11px] uppercase tracking-[0.1em] transition-colors ${
+            className={`relative flex shrink-0 items-center justify-center gap-1.5 border font-mono uppercase tracking-[0.1em] transition-colors ${
+                compact ? 'h-8 px-2 text-[10px]' : 'h-9 px-2.5 text-[11px]'
+            } ${
                 active
                     ? 'border-[#D95D24] bg-[#D95D24] font-semibold text-[#060606] hover:bg-[#E86B30]'
                     : isBusy

@@ -248,3 +248,14 @@ def test_7_token_guard_and_websocket_auth(monkeypatch):
     with client.websocket_connect("/ws?token=secure-token-12345") as ws:
         msg = ws.receive_json()
         assert msg["type"] == "connected"
+
+    # WebSocket with Sec-WebSocket-Protocol subprotocol token connects without URL query leakage
+    with client.websocket_connect(
+        "/ws", subprotocols=["orbit-v1", "orbit-token.secure-token-12345"]
+    ) as ws:
+        msg = ws.receive_json()
+        assert msg["type"] == "connected"
+
+    # /tts/* static audio replies are now protected when ORBIT_API_TOKEN is enabled
+    res_tts_unauth = client.get("/tts/reply_nonexistent.wav")
+    assert res_tts_unauth.status_code == 401

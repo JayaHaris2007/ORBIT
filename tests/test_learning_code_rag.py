@@ -236,3 +236,59 @@ def test_folder_picker_endpoint(isolated_learning_env, monkeypatch):
     res_cancel = client.post("/api/learning/folders/pick", json={})
     assert res_cancel.status_code == 200
     assert res_cancel.json() == {"cancelled": True, "folder_path": None}
+
+
+def test_code_rag_modern_languages_and_stat_skip(temp_db, tmp_path, monkeypatch):
+    """Verify React/TS/SQL/Rust concept extraction and zero-disk-read skip on unchanged files."""
+    schema.init(temp_db.database_path)
+    imported = progress.import_learning_path(
+        name="Full-Stack Systems",
+        category="technical",
+        topics=["React Hooks & Components", "REST APIs & Routing", "SQL Queries", "Rust Ownership"],
+        auto_generate_if_empty=False,
+    )
+    rm = imported["roadmap"]
+
+    folder = tmp_path / "fullstack_practice"
+    folder.mkdir()
+    tsx_file = folder / "useCounter.tsx"
+    tsx_file.write_text(
+        "import { useState, useEffect } from 'react';\n"
+        "export function CounterWidget() {\n"
+        "  const [count, setCount] = useState(0);\n"
+        "  useEffect(() => { document.title = String(count); }, [count]);\n"
+        "  return <div>{count}</div>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    rs_file = folder / "borrow_demo.rs"
+    rs_file.write_text(
+        "struct Buffer { data: Vec<u8> }\n"
+        "impl Buffer {\n"
+        "    fn push_byte(&mut self, b: u8) { self.data.push(b); }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    tsx_info = code_rag.analyze_source_file(tsx_file, folder)
+    assert "react_components_hooks" in tsx_info["code_concepts"]
+    assert "CounterWidget" in tsx_info["symbols"]
+
+    rs_info = code_rag.analyze_source_file(rs_file, folder)
+    assert "rust_ownership_borrowing" in rs_info["code_concepts"]
+    assert "Buffer" in rs_info["symbols"]
+
+    code_rag.link_folder_to_roadmap(rm["id"], str(folder), sync_now=True)
+
+    # On second sync with unchanged mtime+size, read_bytes should NOT be called at all
+    read_calls = []
+    orig_read_bytes = type(tsx_file).read_bytes
+
+    def _spy_read_bytes(self):
+        read_calls.append(self.name)
+        return orig_read_bytes(self)
+
+    monkeypatch.setattr(type(tsx_file), "read_bytes", _spy_read_bytes)
+    sync2 = code_rag.sync_roadmap_folder(rm["id"])
+    assert sync2["files_reindexed"] == 0
+    assert read_calls == []

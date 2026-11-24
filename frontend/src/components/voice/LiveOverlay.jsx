@@ -61,7 +61,7 @@ const EMBER_PALETTE = [
     '#7A2F10', '#B34517', '#D95D24', '#FF8A3D', '#FFD4A8',
 ];
 
-function LiveVoiceWave({ state, isMuted, brainRef }) {
+export function LiveVoiceWave({ state = 'listening', isMuted = false, brainRef = null }) {
     const canvasRef = useRef(null);
     const stateRef = useRef(state);
     const mutedRef = useRef(isMuted);
@@ -116,7 +116,7 @@ function LiveVoiceWave({ state, isMuted, brainRef }) {
             const st = stateRef.current;
             const muted = mutedRef.current;
 
-            const rawMic = muted ? 0 : (brainRef.current?.audioLevelRef?.current || 0);
+            const rawMic = muted ? 0 : (brainRef?.current?.audioLevelRef?.current || 0);
             const rawTts = getSharedAudioQueue()?.getOutputLevel?.() || 0;
             let targetEnergy = Math.max(rawMic, rawTts);
 

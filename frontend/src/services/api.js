@@ -4,9 +4,18 @@ const ORBIT_TOKEN = (import.meta.env.VITE_ORBIT_TOKEN || '').trim();
 
 export const GEMINI_KEY_STORAGE = 'spidey_gemini_api_key';
 export const GEMINI_MODEL_STORAGE = 'spidey_gemini_model';
+export const OLLAMA_MODEL_STORAGE = 'spidey_ollama_model';
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 
 const DEPRECATED_GEMINI_MODELS = new Set(['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']);
+
+export const getOllamaModelConfig = () => {
+    try {
+        return (localStorage.getItem(OLLAMA_MODEL_STORAGE) || '').trim();
+    } catch {
+        return '';
+    }
+};
 
 export const getGeminiConfig = () => {
     try {
@@ -24,12 +33,17 @@ export const getGeminiConfig = () => {
 };
 
 export const getGeminiHeaders = () => {
+    const headers = {};
+    const ollamaModel = getOllamaModelConfig();
+    if (ollamaModel) {
+        headers['X-Ollama-Model'] = ollamaModel;
+    }
     const { apiKey, model } = getGeminiConfig();
-    if (!apiKey) return {};
-    return {
-        'X-Gemini-Api-Key': apiKey,
-        'X-Gemini-Model': model,
-    };
+    if (apiKey) {
+        headers['X-Gemini-Api-Key'] = apiKey;
+        headers['X-Gemini-Model'] = model;
+    }
+    return headers;
 };
 
 export const apiRequest = async (path, options = {}) => {
@@ -68,7 +82,7 @@ export const apiStreamRequest = async (path, options = {}, onEvent) => {
     });
     if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.detail || payload.error || `S.P.I.D.E.Y request failed (${response.status}).`);
+        throw new Error(payload.detail || payload.error || `ORBIT request failed (${response.status}).`);
     }
     if (!response.body) {
         throw new Error('Streaming is not supported by this browser.');

@@ -1,11 +1,47 @@
 import { motion } from 'framer-motion';
 import { format, subDays } from 'date-fns';
-import * as Icons from 'lucide-react';
+import {
+    Activity,
+    BookOpen,
+    Brain,
+    CheckCircle2,
+    Clock,
+    Code,
+    Coffee,
+    Droplets,
+    Dumbbell,
+    Flame,
+    Heart,
+    Moon,
+    Music,
+    Sun,
+    Target,
+    Zap,
+} from 'lucide-react';
+
+const HABIT_ICONS = {
+    Activity,
+    BookOpen,
+    Brain,
+    CheckCircle2,
+    Clock,
+    Code,
+    Coffee,
+    Droplets,
+    Dumbbell,
+    Flame,
+    Heart,
+    Moon,
+    Music,
+    Sun,
+    Target,
+    Zap,
+};
 
 const HabitCard = ({ habit, onToggle, onDelete, onEdit }) => {
     const today = format(new Date(), 'yyyy-MM-dd');
     const isCompletedToday = habit.completedDates?.includes(today);
-    const IconComponent = Icons[habit.icon] || Icons.Activity;
+    const IconComponent = HABIT_ICONS[habit.icon] || Activity;
 
     // 7-day ASCII dot strip
     const last7 = Array.from({ length: 7 }, (_, i) => {

@@ -55,15 +55,20 @@ function getKeySpatialPos(rawKey) {
  *   and a sleek bottom-to-top transmission scanline sweep on Enter/Send.
  * - Voice & AI: live acoustic wave elevation and thinking/streaming momentum.
  */
-export default function SpideyAsciiCanvas({ className = '' }) {
+export default function SpideyAsciiCanvas({ className = '', paused = false, position = 'fixed' }) {
     const containerRef = useRef(null);
     const canvasRef = useRef(null);
     const brain = useSpideyBrain();
     const brainRef = useRef(brain);
+    const pausedRef = useRef(paused);
 
     useEffect(() => {
         brainRef.current = brain;
     }, [brain]);
+
+    useEffect(() => {
+        pausedRef.current = paused;
+    }, [paused]);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -284,10 +289,24 @@ export default function SpideyAsciiCanvas({ className = '' }) {
         window.addEventListener('spidey:submit_wave', onSubmitWave);
 
         let isTabVisible = !document.hidden;
+        let isInViewport = true;
         const onVisibility = () => {
             isTabVisible = !document.hidden;
         };
         document.addEventListener('visibilitychange', onVisibility);
+
+        let intersectionObserver = null;
+        if (typeof IntersectionObserver !== 'undefined') {
+            intersectionObserver = new IntersectionObserver(
+                (entries) => {
+                    if (entries[0]) {
+                        isInViewport = entries[0].isIntersecting;
+                    }
+                },
+                { threshold: 0.02 }
+            );
+            intersectionObserver.observe(container);
+        }
 
         let lastTime = performance.now();
         let lastSeenPulseTime = 0;
@@ -312,7 +331,7 @@ export default function SpideyAsciiCanvas({ className = '' }) {
 
         const animate = (now) => {
             rafId = requestAnimationFrame(animate);
-            if (!isTabVisible) {
+            if (!isTabVisible || !isInViewport || pausedRef.current) {
                 lastTime = now;
                 return;
             }
@@ -618,6 +637,7 @@ export default function SpideyAsciiCanvas({ className = '' }) {
         return () => {
             cancelAnimationFrame(rafId);
             resizeObserver.disconnect();
+            intersectionObserver?.disconnect();
             document.removeEventListener('visibilitychange', onVisibility);
             window.removeEventListener('pointermove', onWindowPointerMove);
             document.removeEventListener('pointerleave', onWindowPointerLeave);
@@ -627,11 +647,13 @@ export default function SpideyAsciiCanvas({ className = '' }) {
         };
     }, []);
 
+    const posClass = position === 'absolute' ? 'absolute inset-0' : 'fixed inset-0';
+
     return (
         <div
             ref={containerRef}
             aria-hidden="true"
-            className={`pointer-events-none fixed inset-0 z-0 overflow-hidden bg-[#050505] select-none ${className}`}
+            className={`pointer-events-none ${posClass} z-0 overflow-hidden bg-[#050505] select-none ${className}`}
         >
             <canvas ref={canvasRef} className="block h-full w-full" />
         </div>

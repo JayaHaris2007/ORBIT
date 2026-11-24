@@ -219,3 +219,69 @@ def test_stt_whisper_fallback_and_silence():
         adapter = stt.STT(engine="whisper_local")
         res = adapter.transcribe(b"\x00" * 3200)
         assert res == ""
+
+
+def test_ws_voice_streams_sentences_and_partial_captions(temp_db, monkeypatch):
+    """Verify /ws/voice streams partial captions and synthesizes sentences concurrently."""
+    import json
+    from voice import router as voice_router
+
+    fake_stt = MagicMock()
+    async def _fake_transcribe(_pcm):
+        return "Explain pointers briefly"
+    fake_stt.transcribe_async = _fake_transcribe
+    monkeypatch.setattr(stt, "get_stt", lambda: fake_stt)
+
+    fake_tts = MagicMock()
+    fake_tts.available = True
+    fake_tts.synthesize.side_effect = lambda text, cancel=None: np.zeros(160, dtype=np.float32)
+    monkeypatch.setattr(tts, "get_tts_engine", lambda: fake_tts)
+
+    async def _fake_stream_handler(prompt, chat_id, on_token=None, on_stream_reset=None):
+        chunks = [
+            "Pointers store memory addresses directly in variables. ",
+            "They let functions mutate data without copying large buffers.",
+        ]
+        for ch in chunks:
+            if on_token:
+                await on_token(ch)
+        full = "".join(chunks)
+        return {
+            "response": full,
+            "spoken_response": full,
+            "chat_id": chat_id or "default",
+            "messages": [],
+            "provider": "ollama",
+            "navigate": None,
+            "ui_actions": [],
+        }
+
+    monkeypatch.setattr(voice_router, "_STREAM_CHAT_HANDLER", _fake_stream_handler)
+
+    client = TestClient(app.app)
+    with client.websocket_connect("/ws/voice") as ws:
+        ws.send_text(json.dumps({"type": "start", "mode": "ptt", "chat_id": "default"}))
+        st_msg = json.loads(ws.receive_text())
+        assert st_msg == {"type": "state", "value": "listening"}
+
+        # Send >100ms of PCM and commit
+        ws.send_bytes(b"\x10\x00" * 2000)
+        ws.send_text(json.dumps({"type": "commit"}))
+
+        seen_types = []
+        audio_frames = 0
+        while True:
+            pkt = ws.receive()
+            if "text" in pkt:
+                data = json.loads(pkt["text"])
+                seen_types.append(data["type"])
+                if data["type"] == "state" and data["value"] == "idle":
+                    break
+            elif "bytes" in pkt:
+                audio_frames += 1
+
+        assert "transcript" in seen_types
+        assert "reply_partial" in seen_types
+        assert "reply" in seen_types
+        assert "audio" in seen_types
+        assert audio_frames >= 2

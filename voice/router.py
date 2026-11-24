@@ -6,24 +6,65 @@ import asyncio
 import json
 import logging
 import math
+import os
+import re
+import secrets
 import struct
 import time
 from typing import Any, Callable, Coroutine
 
-import os
-import secrets
 from fastapi import APIRouter, Body, HTTPException, Response, WebSocket, WebSocketDisconnect
 
-API_TOKEN = os.environ.get("ORBIT_API_TOKEN", "").strip()
+
+def _active_api_token() -> str:
+    try:
+        import app
+        return str(getattr(app, "API_TOKEN", "") or "").strip()
+    except Exception:
+        return os.environ.get("ORBIT_API_TOKEN", "").strip()
+
+
+def _safe_header_str(headers: Any, key: str) -> str:
+    if not hasattr(headers, "get") or type(headers).__name__ == "AsyncMock":
+        return ""
+    val = headers.get(key)
+    return val.strip() if isinstance(val, str) else ""
+
+
+def _extract_ws_token(ws: WebSocket) -> str:
+    headers = getattr(ws, "headers", None)
+    header_tok = _safe_header_str(headers, "x-orbit-token")
+    if header_tok:
+        return header_tok
+    proto_header = _safe_header_str(headers, "sec-websocket-protocol")
+    for part in proto_header.split(","):
+        item = part.strip()
+        if item.startswith("orbit-token."):
+            return item[len("orbit-token.") :]
+    qp = getattr(ws, "query_params", None)
+    if not hasattr(qp, "get") or type(qp).__name__ == "AsyncMock":
+        return ""
+    tok = qp.get("token", "")
+    return tok if isinstance(tok, str) else ""
 
 
 async def ws_authorized(ws: WebSocket) -> bool:
-    if not API_TOKEN:
+    token = _active_api_token()
+    if not token:
         return True
-    ok = secrets.compare_digest(ws.query_params.get("token", ""), API_TOKEN)
+    ok = secrets.compare_digest(_extract_ws_token(ws), token)
     if not ok:
         await ws.close(code=1008)
     return ok
+
+
+def _accept_subprotocol(ws: WebSocket) -> str | None:
+    proto_header = _safe_header_str(getattr(ws, "headers", None), "sec-websocket-protocol")
+    for part in proto_header.split(","):
+        if part.strip() == "orbit-v1":
+            return "orbit-v1"
+    return None
+
 
 from . import config, text_clean, sentences, session, tts, stt
 
@@ -32,8 +73,10 @@ log = logging.getLogger("spidey.voice.router")
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 ws_router = APIRouter(tags=["voice"])
 
-# Persistent chat handler registered by app.py
+# Persistent chat handlers registered by app.py
 _CHAT_HANDLER: Callable[[str, str | None], Coroutine[Any, Any, dict[str, Any]]] | None = None
+_STREAM_CHAT_HANDLER: Callable[..., Coroutine[Any, Any, dict[str, Any]]] | None = None
+_SENTENCE_BOUNDARY_RE = re.compile(r"([.!?]+(?:\s+|$)|\n+)")
 
 
 def set_chat_handler(
@@ -46,6 +89,18 @@ def set_chat_handler(
 
 def get_chat_handler() -> Callable[[str, str | None], Coroutine[Any, Any, dict[str, Any]]] | None:
     return _CHAT_HANDLER
+
+
+def set_stream_chat_handler(
+    handler: Callable[..., Coroutine[Any, Any, dict[str, Any]]] | None
+) -> None:
+    """Register the streaming chat pipeline function from app.py."""
+    global _STREAM_CHAT_HANDLER
+    _STREAM_CHAT_HANDLER = handler
+
+
+def get_stream_chat_handler() -> Callable[..., Coroutine[Any, Any, dict[str, Any]]] | None:
+    return _STREAM_CHAT_HANDLER
 
 
 _in_memory_speak_enabled: bool = False
@@ -206,7 +261,11 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
     """WebSocket gateway for continuous mic streaming, STT, and live conversational turns."""
     if not await ws_authorized(websocket):
         return
-    await websocket.accept()
+    subproto = _accept_subprotocol(websocket)
+    if subproto:
+        await websocket.accept(subprotocol=subproto)
+    else:
+        await websocket.accept()
     client_id = f"ws-{id(websocket)}"
     voice_sess = session.get_voice_session(client_id)
     stt_engine = stt.get_stt()
@@ -229,40 +288,48 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
         except Exception:
             pass
 
+    def _should_speak() -> bool:
+        return mode in ("live", "ptt") or _read_speak_setting()
+
+    async def _synthesize_and_send_sentence(sent: str, seq: int) -> bool:
+        nonlocal is_speaking
+        if voice_sess.cancel.is_set() or not sent.strip():
+            return False
+        if not tts_engine.available:
+            await asyncio.to_thread(tts_engine.load)
+        if not tts_engine.available:
+            return False
+        if not is_speaking:
+            is_speaking = True
+            await send_state(session.VState.SPEAKING)
+        audio_array = await asyncio.to_thread(
+            tts_engine.synthesize, sent, voice_sess.cancel
+        )
+        if audio_array is None or voice_sess.cancel.is_set():
+            return False
+        wav_data = tts.audio_to_wav_bytes(audio_array, sample_rate=config.SAMPLE_RATE)
+        header = json.dumps({"type": "audio", "seq": seq, "sentence": sent})
+        try:
+            await websocket.send_text(header)
+            await websocket.send_bytes(wav_data)
+            return True
+        except Exception:
+            return False
+
     async def speak_sentences(reply_text: str) -> None:
         nonlocal is_speaking
+        if not _should_speak():
+            return
         cleaned = text_clean.summarize_for_speech(reply_text)
         sentences_list = sentences.split_sentences(cleaned, max_chars=config.MAX_SENTENCE_CHARS)
         if not sentences_list:
             return
-        if mode not in ("live", "ptt") and not _read_speak_setting():
-            return
-
-        if not tts_engine.available:
-            await asyncio.to_thread(tts_engine.load)
-        if not tts_engine.available:
-            return
-
-        is_speaking = True
-        await send_state(session.VState.SPEAKING)
-
         for seq, sent in enumerate(sentences_list):
             if voice_sess.cancel.is_set():
                 break
-            audio_array = await asyncio.to_thread(
-                tts_engine.synthesize, sent, voice_sess.cancel
-            )
-            if audio_array is None or voice_sess.cancel.is_set():
+            ok = await _synthesize_and_send_sentence(sent, seq)
+            if not ok:
                 break
-
-            wav_data = tts.audio_to_wav_bytes(audio_array, sample_rate=config.SAMPLE_RATE)
-            header = json.dumps({"type": "audio", "seq": seq, "sentence": sent})
-            try:
-                await websocket.send_text(header)
-                await websocket.send_bytes(wav_data)
-            except Exception:
-                break
-
         is_speaking = False
 
     async def process_utterance() -> None:
@@ -290,43 +357,191 @@ async def websocket_voice_endpoint(websocket: WebSocket) -> None:
 
         await websocket.send_text(json.dumps({"type": "transcript", "text": transcript}))
 
-        # 2. Think / Generate reply
+        # 2. Think / Stream reply + concurrent sentence-by-sentence TTS synthesis
         await send_state(session.VState.THINKING)
+        stream_handler = get_stream_chat_handler()
         handler = get_chat_handler()
         reply_text = ""
         chat_res: dict[str, Any] = {}
-        if handler:
+
+        use_streaming = stream_handler is not None and (
+            handler is None or getattr(handler, "_is_default_voice_handler", False)
+        )
+        if use_streaming:
+            can_speak = _should_speak()
+            sent_queue: asyncio.Queue[str | None] = asyncio.Queue()
+            raw_stream_buf = ""
+            partial_accum = ""
+            in_code_fence = False
+            spoken_any_streaming = False
+
+            async def _tts_consumer() -> None:
+                nonlocal is_speaking, spoken_any_streaming
+                seq = 0
+                try:
+                    while not voice_sess.cancel.is_set():
+                        item = await sent_queue.get()
+                        if item is None:
+                            break
+                        for piece in sentences.split_sentences(item, max_chars=config.MAX_SENTENCE_CHARS):
+                            if voice_sess.cancel.is_set():
+                                break
+                            ok = await _synthesize_and_send_sentence(piece, seq)
+                            if not ok:
+                                return
+                            spoken_any_streaming = True
+                            seq += 1
+                finally:
+                    is_speaking = False
+
+            tts_worker = asyncio.create_task(_tts_consumer()) if can_speak else None
+
+            def _drain_ready_sentences(force_flush: bool = False) -> list[str]:
+                nonlocal raw_stream_buf, in_code_fence
+                ready: list[str] = []
+                while raw_stream_buf:
+                    fence_idx = raw_stream_buf.find("```")
+                    if fence_idx != -1:
+                        before = raw_stream_buf[:fence_idx]
+                        raw_stream_buf = raw_stream_buf[fence_idx + 3 :]
+                        if not in_code_fence and before.strip():
+                            cleaned = text_clean.clean_text_for_speech(before)
+                            if cleaned:
+                                ready.append(cleaned)
+                        in_code_fence = not in_code_fence
+                        continue
+                    if in_code_fence:
+                        # Hold inside code block until closing fence arrives
+                        if force_flush:
+                            raw_stream_buf = ""
+                        break
+                    match = _SENTENCE_BOUNDARY_RE.search(raw_stream_buf)
+                    if not match:
+                        if force_flush:
+                            cleaned = text_clean.clean_text_for_speech(raw_stream_buf)
+                            raw_stream_buf = ""
+                            if cleaned:
+                                ready.append(cleaned)
+                        break
+                    cut = match.end()
+                    candidate = raw_stream_buf[:cut]
+                    if len(candidate.strip()) < 28 and not force_flush:
+                        # Wait for a little more text so tiny clauses batch naturally
+                        next_match = _SENTENCE_BOUNDARY_RE.search(raw_stream_buf, pos=cut)
+                        if not next_match:
+                            break
+                        cut = next_match.end()
+                        candidate = raw_stream_buf[:cut]
+                    raw_stream_buf = raw_stream_buf[cut:]
+                    cleaned = text_clean.clean_text_for_speech(candidate)
+                    if cleaned:
+                        ready.append(cleaned)
+                return ready
+
+            async def _on_voice_token(delta: str) -> None:
+                nonlocal raw_stream_buf, partial_accum
+                if voice_sess.cancel.is_set() or not delta:
+                    return
+                partial_accum += delta
+                raw_stream_buf += delta
+                try:
+                    await websocket.send_text(
+                        json.dumps({"type": "reply_partial", "text": partial_accum})
+                    )
+                except Exception:
+                    pass
+                if tts_worker is not None:
+                    for ready_sent in _drain_ready_sentences(force_flush=False):
+                        await sent_queue.put(ready_sent)
+
+            async def _on_voice_reset() -> None:
+                nonlocal raw_stream_buf, partial_accum, in_code_fence
+                raw_stream_buf = ""
+                partial_accum = ""
+                in_code_fence = False
+
             try:
-                chat_res = await handler(transcript, chat_id)
+                chat_res = await stream_handler(
+                    transcript,
+                    chat_id,
+                    on_token=_on_voice_token,
+                    on_stream_reset=_on_voice_reset,
+                )
                 reply_text = chat_res.get("response", "")
             except Exception as e:
+                if tts_worker is not None:
+                    await sent_queue.put(None)
+                    tts_worker.cancel()
                 await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
                 await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
                 return
 
-        if not reply_text.strip() or voice_sess.cancel.is_set():
-            await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
-            return
+            if not reply_text.strip() or voice_sess.cancel.is_set():
+                if tts_worker is not None:
+                    await sent_queue.put(None)
+                    tts_worker.cancel()
+                await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
+                return
 
-        spoken_source = chat_res.get("spoken_response") or reply_text
-        await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "reply",
-                    "text": reply_text,
-                    "transcript": transcript,
-                    "spoken_text": text_clean.summarize_for_speech(spoken_source),
-                    "chat_id": chat_res.get("chat_id") or chat_id,
-                    "messages": chat_res.get("messages"),
-                    "navigate": chat_res.get("navigate"),
-                    "provider": chat_res.get("provider"),
-                    "ui_actions": chat_res.get("ui_actions"),
-                }
+            spoken_source = chat_res.get("spoken_response") or reply_text
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "reply",
+                        "text": reply_text,
+                        "transcript": transcript,
+                        "spoken_text": text_clean.summarize_for_speech(spoken_source),
+                        "chat_id": chat_res.get("chat_id") or chat_id,
+                        "messages": chat_res.get("messages"),
+                        "navigate": chat_res.get("navigate"),
+                        "provider": chat_res.get("provider"),
+                        "ui_actions": chat_res.get("ui_actions"),
+                    }
+                )
             )
-        )
 
-        # 3. Speak
-        await speak_sentences(spoken_source)
+            if tts_worker is not None:
+                # If turn came from deterministic local router (no streamed tokens yet), enqueue full spoken_source
+                if not partial_accum.strip():
+                    await sent_queue.put(text_clean.summarize_for_speech(spoken_source))
+                else:
+                    for tail_sent in _drain_ready_sentences(force_flush=True):
+                        await sent_queue.put(tail_sent)
+                await sent_queue.put(None)
+                await tts_worker
+        else:
+            if handler:
+                try:
+                    chat_res = await handler(transcript, chat_id)
+                    reply_text = chat_res.get("response", "")
+                except Exception as e:
+                    await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))
+                    await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
+                    return
+
+            if not reply_text.strip() or voice_sess.cancel.is_set():
+                await send_state(session.VState.LISTENING if mode == "live" else session.VState.IDLE)
+                return
+
+            spoken_source = chat_res.get("spoken_response") or reply_text
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "reply",
+                        "text": reply_text,
+                        "transcript": transcript,
+                        "spoken_text": text_clean.summarize_for_speech(spoken_source),
+                        "chat_id": chat_res.get("chat_id") or chat_id,
+                        "messages": chat_res.get("messages"),
+                        "navigate": chat_res.get("navigate"),
+                        "provider": chat_res.get("provider"),
+                        "ui_actions": chat_res.get("ui_actions"),
+                    }
+                )
+            )
+
+            # 3. Speak
+            await speak_sentences(spoken_source)
 
         # 4. Finish turn
         if mode == "live" and not voice_sess.cancel.is_set():

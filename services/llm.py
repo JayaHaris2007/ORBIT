@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -15,7 +16,110 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from agent.loop import AgentResult
+from agent.loop import (
+    AgentResult,
+    _MODELS_WITHOUT_THINK,
+    _MODELS_WITHOUT_TOOLS,
+    is_think_unsupported_error,
+)
+
+_request_ollama_model: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "request_ollama_model", default=None
+)
+
+_EMBEDDING_FAMILY_HINTS = ("embed", "nomic-embed", "bge-", "minilm", "arctic-embed", "e5-")
+
+
+def set_request_ollama_model(model: str | None) -> contextvars.Token[str | None]:
+    clean = model.strip() if isinstance(model, str) and model.strip() else None
+    return _request_ollama_model.set(clean)
+
+
+def reset_request_ollama_model(token: contextvars.Token[str | None]) -> None:
+    _request_ollama_model.reset(token)
+
+
+def get_active_ollama_model() -> str:
+    override = _request_ollama_model.get()
+    if override:
+        return override
+    return (_app().OLLAMA_MODEL or os.environ.get("OLLAMA_MODEL", "qwen3.5:4b")).strip()
+
+
+def is_embedding_only_model(name: str, details: dict[str, Any] | None = None) -> bool:
+    low = (name or "").lower()
+    if any(hint in low for hint in _EMBEDDING_FAMILY_HINTS):
+        return True
+    families = [str(f).lower() for f in ((details or {}).get("families") or [])]
+    if families and all("bert" in f or "nomic-bert" in f for f in families):
+        return True
+    return False
+
+
+def list_ollama_models() -> dict[str, Any]:
+    """Return all installed Ollama models from /api/tags enriched with /api/ps VRAM status."""
+    base_url = _app().OLLAMA_URL
+    tags_url = f"{base_url}/api/tags"
+    ps_url = f"{base_url}/api/ps"
+    active = get_active_ollama_model()
+
+    req = urllib.request.Request(tags_url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            tags_data = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        return {
+            "reachable": False,
+            "active_model": active,
+            "models": [],
+            "error": str(exc),
+        }
+
+    loaded_names: set[str] = set()
+    try:
+        ps_req = urllib.request.Request(ps_url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(ps_req, timeout=1.5) as ps_resp:
+            ps_data = json.loads(ps_resp.read().decode("utf-8"))
+        for pm in ps_data.get("models") or []:
+            pname = (pm.get("name") or pm.get("model") or "").strip()
+            if pname:
+                loaded_names.add(pname)
+                if pname.endswith(":latest"):
+                    loaded_names.add(pname[:-7])
+    except Exception:
+        pass
+
+    chat_models: list[dict[str, Any]] = []
+    embed_models: list[dict[str, Any]] = []
+    for raw in tags_data.get("models") or []:
+        name = (raw.get("name") or raw.get("model") or "").strip()
+        if not name:
+            continue
+        details = raw.get("details") if isinstance(raw.get("details"), dict) else {}
+        is_embed = is_embedding_only_model(name, details)
+        short_name = name[:-7] if name.endswith(":latest") else name
+        item = {
+            "name": name,
+            "size": raw.get("size"),
+            "modified_at": raw.get("modified_at"),
+            "parameter_size": details.get("parameter_size") or "",
+            "quantization_level": details.get("quantization_level") or "",
+            "family": details.get("family") or "",
+            "loaded": (name in loaded_names) or (short_name in loaded_names),
+            "is_embedding": is_embed,
+            "tools_supported": name not in _MODELS_WITHOUT_TOOLS and not is_embed,
+        }
+        if is_embed:
+            embed_models.append(item)
+        else:
+            chat_models.append(item)
+
+    return {
+        "reachable": True,
+        "active_model": active,
+        "models": [*chat_models, *embed_models],
+        "chat_models": [m["name"] for m in chat_models],
+    }
 
 def _app():
     import app
@@ -24,21 +128,19 @@ def _app():
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are ORBIT, Jaya's personal AI assistant, technical co-pilot, "
+    "You are ORBIT, a personal AI assistant, technical co-pilot, "
     "and everyday companion. Talk naturally like a smart, friendly, attentive "
     "person. Be confident, practical, curious, and occasionally witty. Use "
     "natural contractions, simple English, and a conversational tone. "
     "Never sound robotic or overly formal. "
 
     "Keep routine replies concise, but explain technical topics in depth when "
-    "Jaya asks. Avoid canned praise, unnecessary introductions, repetitive "
+    "the user asks. Avoid canned praise, unnecessary introductions, repetitive "
     "conclusions, and narrating simple actions. Respond directly to what "
-    "Jaya actually says and understand short follow-ups using conversation "
+    "the user actually says and understand short follow-ups using conversation "
     "context. "
 
-    "Jaya is a Computer Science student, developer, and technology enthusiast "
-    "who enjoys building real-world projects, exploring AI, and experimenting "
-    "with new technologies. Adapt explanations to his technical knowledge. "
+    "Adapt explanations to the user's technical knowledge. "
     "Help with programming, debugging, web development, databases, AI models, "
     "system architecture, and software engineering. Prefer practical solutions, "
     "working code, and clear explanations over unnecessary theory. "
@@ -57,16 +159,16 @@ DEFAULT_SYSTEM_PROMPT = (
     "focused question if essential information is missing. Never claim an "
     "action succeeded unless the application confirms it. "
 
-    "Support Jaya's learning and growth as a developer. Explain difficult "
+    "Support the user's learning and growth as a developer. Explain difficult "
     "concepts clearly, connect new ideas to existing knowledge, correct "
     "mistakes respectfully, and suggest useful next steps when appropriate. "
     "Be encouraging without giving empty praise. Challenge ideas constructively "
     "when doing so helps achieve a better result. "
 
     "Use saved notes and conversation history to understand the user, "
-    "preferences, and ongoing projects. Saved notes may describe either Jaya "
-    "or you. When a note describes Jaya, speak about him as 'you' and never "
-    "present his experiences, preferences, or plans as your own. Never invent "
+    "preferences, and ongoing projects. Saved notes may describe either the user "
+    "or you. When a note describes the user, speak about them as 'you' and never "
+    "present their experiences, preferences, or plans as your own. Never invent "
     "personal facts, memories, or previous decisions. Use personal context "
     "only when it is relevant. "
 
@@ -78,17 +180,55 @@ DEFAULT_SYSTEM_PROMPT = (
     "received. Use light humor naturally without forcing it. Think through "
     "problems carefully, but communicate clearly and directly. "
 
-    "Your identity is ORBIT. You are Jaya's dependable personal assistant, "
-    "technical co-pilot, and companion in learning and development. Help him "
-    "think clearly, build better projects, solve problems, and get things done. "
+    "Your identity is ORBIT — a dependable personal assistant, "
+    "technical co-pilot, and companion in learning and development. "
 
-    "Answer in English unless Jaya requests another language."
+    "Answer in English unless the user requests another language."
 )
 
 
+def _resolve_active_user_name() -> str:
+    env_name = os.environ.get("ORBIT_USER_NAME", "").strip()
+    if env_name:
+        return env_name
+    try:
+        return _app()._user_name(_app()._user_fact_memories())
+    except Exception:
+        return ""
+
+
+
+def _match_installed_model(target: str, raw_models: list[dict[str, Any]]) -> str | None:
+    """Match target against installed Ollama model tags (exact, :latest-normalized, or case-insensitive)."""
+    exact_names: list[str] = []
+    lower_map: dict[str, str] = {}
+    for m in raw_models:
+        name = (m.get("name") or m.get("model") or "").strip()
+        if not name:
+            continue
+        exact_names.append(name)
+        lower_map[name.lower()] = name
+        if name.endswith(":latest"):
+            lower_map[name[:-7].lower()] = name
+        else:
+            lower_map[f"{name}:latest".lower()] = name
+
+    t = target.strip()
+    if t in exact_names:
+        return t
+    t_low = t.lower()
+    if t_low in lower_map:
+        return lower_map[t_low]
+    if t_low.endswith(":latest") and t_low[:-7] in lower_map:
+        return lower_map[t_low[:-7]]
+    if f"{t_low}:latest" in lower_map:
+        return lower_map[f"{t_low}:latest"]
+    return None
+
 
 def _ollama_check() -> None:
-    if _app()._ollama_ready:
+    active_target = get_active_ollama_model()
+    if _app()._ollama_ready and active_target == _app().OLLAMA_MODEL:
         return
     url = f"{_app().OLLAMA_URL}/api/tags"
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -107,32 +247,28 @@ def _ollama_check() -> None:
         ) from exc
 
     models = data.get("models") or []
-    available = set()
-    for m in models:
-        name = m.get("name") or m.get("model") or ""
-        if name:
-            available.add(name)
-            if name.endswith(":latest"):
-                available.add(name[:-7])
-            else:
-                available.add(f"{name}:latest")
-
-    target = _app().OLLAMA_MODEL
-    matched = (
-        target in available
-        or (target.endswith(":latest") and target[:-7] in available)
-        or (f"{target}:latest" in available)
-    )
+    matched = _match_installed_model(active_target, models)
     if not matched:
-        _app()._ollama_ready = False
-        raise RuntimeError(
-            f"Model {_app().OLLAMA_MODEL} not found. Run `ollama pull {_app().OLLAMA_MODEL}`."
-        )
+        # Optional auto-select fallback when OLLAMA_AUTO_SELECT_INSTALLED=1 and at least one chat model exists
+        if os.environ.get("OLLAMA_AUTO_SELECT_INSTALLED", "0").strip() == "1":
+            for m in models:
+                cand = (m.get("name") or m.get("model") or "").strip()
+                details = m.get("details") if isinstance(m.get("details"), dict) else {}
+                if cand and not is_embedding_only_model(cand, details):
+                    _app().OLLAMA_MODEL = cand
+                    matched = cand
+                    break
+        if not matched:
+            _app()._ollama_ready = False
+            raise RuntimeError(
+                f"Model {active_target} not found. Run `ollama pull {active_target}`."
+            )
 
-    _app()._ollama_ready = True
+    if active_target == _app().OLLAMA_MODEL:
+        _app()._ollama_ready = True
     try:
         from runtime.models import REGISTRY
-        REGISTRY.register("llm", "ollama", metrics={"backend": "ollama", "model": _app().OLLAMA_MODEL})
+        REGISTRY.register("llm", "ollama", metrics={"backend": "ollama", "model": matched})
     except Exception:
         _app().LOGGER.debug("Suppressed error (app.py site 1)", exc_info=True)
 
@@ -296,11 +432,11 @@ def _trim_incomplete(text: str) -> str:
 
 def _generate_ollama(messages: list[dict[str, str]], max_new_tokens: int) -> str:
     url = f"{_app().OLLAMA_URL}/api/chat"
-    payload = {
-        "model": _app().OLLAMA_MODEL,
+    active_model = get_active_ollama_model()
+    payload: dict[str, Any] = {
+        "model": active_model,
         "messages": messages,
         "stream": False,
-        "think": False,
         "keep_alive": _app().OLLAMA_KEEP_ALIVE,
         "options": {
             "temperature": 0,
@@ -309,26 +445,42 @@ def _generate_ollama(messages: list[dict[str, str]], max_new_tokens: int) -> str
             "num_ctx": _app().OLLAMA_NUM_CTX,
         },
     }
-    payload_bytes = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload_bytes,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
-    )
+    if active_model not in _MODELS_WITHOUT_THINK:
+        payload["think"] = False
+
     t0 = time.perf_counter()
-    try:
-        with urllib.request.urlopen(req, timeout=_app().OLLAMA_TIMEOUT) as resp:
-            raw_bytes = resp.read()
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"Ollama HTTP error {exc.code}: {exc.reason}") from exc
-    except urllib.error.URLError as exc:
-        _app()._ollama_ready = False
-        raise RuntimeError(f"Ollama connection error: {exc.reason}") from exc
-    except TimeoutError as exc:
-        raise RuntimeError(f"Ollama request timed out after {_app().OLLAMA_TIMEOUT}s") from exc
-    except Exception as exc:
-        raise RuntimeError(f"Ollama request failed: {exc}") from exc
+    raw_bytes = b""
+    for _attempt in range(2):
+        payload_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload_bytes,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_app().OLLAMA_TIMEOUT) as resp:
+                raw_bytes = resp.read()
+            break
+        except urllib.error.HTTPError as exc:
+            err_body = ""
+            try:
+                err_body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                err_body = ""
+            combined = f"{exc.reason} {err_body}"
+            if exc.code == 400 and "think" in payload and is_think_unsupported_error(combined):
+                _MODELS_WITHOUT_THINK.add(active_model)
+                payload.pop("think", None)
+                continue
+            raise RuntimeError(f"Ollama HTTP error {exc.code}: {err_body[:200] or exc.reason}") from exc
+        except urllib.error.URLError as exc:
+            _app()._ollama_ready = False
+            raise RuntimeError(f"Ollama connection error: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise RuntimeError(f"Ollama request timed out after {_app().OLLAMA_TIMEOUT}s") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Ollama request failed: {exc}") from exc
 
     elapsed_seconds = time.perf_counter() - t0
     try:
@@ -340,15 +492,15 @@ def _generate_ollama(messages: list[dict[str, str]], max_new_tokens: int) -> str
     try:
         from runtime.models import REGISTRY
         if not REGISTRY.is_ready("llm"):
-            REGISTRY.register("llm", "ollama", metrics={"backend": "ollama", "model": _app().OLLAMA_MODEL})
+            REGISTRY.register("llm", "ollama", metrics={"backend": "ollama", "model": active_model})
     except Exception:
         _app().LOGGER.debug("Suppressed error (app.py site 7)", exc_info=True)
 
-
     message = data.get("message") or {}
     text = message.get("content") or ""
-    # Strip any <think>...</think> block as a safety net
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    # Strip any <think>...</think> or <thought>...</thought> block as a safety net
+    text = re.sub(r"<(?:think|thought)>.*?</(?:think|thought)>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<(?:think|thought)>.*$", "", text, flags=re.DOTALL).strip()
 
     if data.get("done_reason") == "length":
         text = _app()._trim_incomplete(text)
@@ -399,7 +551,16 @@ def generate_response(
         if not context or context[-1]["content"] != prompt:
             context = [*context, {"role": "user", "content": prompt}]
         memory_text = "\n".join(f"- {item['content']}" for item in (memories or []))
-        system_prompt = _app().DEFAULT_SYSTEM_PROMPT
+        active_name = _resolve_active_user_name()
+        system_prompt = (
+            _app().DEFAULT_SYSTEM_PROMPT.replace(
+                "You are ORBIT, a personal AI assistant",
+                f"You are ORBIT, {active_name}'s personal AI assistant",
+                1,
+            )
+            if active_name
+            else _app().DEFAULT_SYSTEM_PROMPT
+        )
         if memory_text:
             system_prompt += (
                 "\nNotes saved from earlier conversations. Lines written in the "
