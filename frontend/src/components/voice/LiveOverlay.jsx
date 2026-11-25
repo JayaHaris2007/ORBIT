@@ -325,7 +325,7 @@ export default function LiveOverlay({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="fixed inset-0 z-30 flex h-dvh flex-col justify-between overflow-hidden bg-[#050505]/86 px-4 py-4 backdrop-blur-[5px] sm:px-6 sm:py-5"
+            className="fixed inset-x-0 bottom-0 top-12 z-30 flex flex-col justify-between overflow-hidden bg-[#050505]/86 px-4 py-4 backdrop-blur-[5px] sm:px-6 sm:py-5"
         >
             {/* TOP BAR — Always Visible, High Contrast */}
             <header className="mx-auto flex w-full max-w-2xl shrink-0 items-center justify-between gap-3 border border-[#F2EFE9]/14 bg-[#090807]/95 px-4 py-2.5 shadow-lg">
