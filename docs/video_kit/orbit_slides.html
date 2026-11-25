@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ORBIT — 1080p Video Presentation Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #050505;
+    --surface: #0A0908;
+    --elevated: #120B07;
+    --ember: #D95D24;
+    --ember-glow: #FF944D;
+    --ember-hot: #FFD4A8;
+    --bone: #F2EFE9;
+    --cream: #CFC9BF;
+    --muted: #8E867D;
+    --dim: #5C564F;
+    --border: rgba(242, 239, 233, 0.14);
+    --font-sans: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--bone);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+
+  /* Full-screen living 3D ASCII topographic backdrop */
+  #ascii-bg {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+  }
+
+  .vignette {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(5,5,5,0.22) 0%, rgba(5,5,5,0.82) 78%, #050505 100%);
+  }
+
+  /* Stage */
+  #stage {
+    position: relative;
+    z-index: 10;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 72px;
+  }
+
+  .slide {
+    display: none;
+    width: 100%;
+    max-width: 1460px;
+    animation: slideEnter 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  .slide.active {
+    display: block;
+  }
+
+  @keyframes slideEnter {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .stagger > * {
+    opacity: 0;
+    transform: translateY(14px);
+    animation: itemReveal 0.42s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  .stagger > *:nth-child(1) { animation-delay: 0.08s; }
+  .stagger > *:nth-child(2) { animation-delay: 0.18s; }
+  .stagger > *:nth-child(3) { animation-delay: 0.28s; }
+  .stagger > *:nth-child(4) { animation-delay: 0.38s; }
+  .stagger > *:nth-child(5) { animation-delay: 0.48s; }
+  .stagger > *:nth-child(6) { animation-delay: 0.58s; }
+
+  @keyframes itemReveal {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Signature ORBIT .ascii-frame */
+  .ascii-frame {
+    position: relative;
+    border: 1px solid var(--border);
+    background: rgba(10, 9, 8, 0.90);
+    backdrop-filter: blur(8px);
+  }
+  .ascii-frame::before,
+  .ascii-frame::after {
+    content: '';
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    pointer-events: none;
+  }
+  .ascii-frame::before {
+    top: -1px; left: -1px;
+    border-top: 2px solid var(--ember);
+    border-left: 2px solid var(--ember);
+  }
+  .ascii-frame::after {
+    right: -1px; bottom: -1px;
+    border-right: 2px solid var(--ember);
+    border-bottom: 2px solid var(--ember);
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--ember);
+    margin-bottom: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .eyebrow-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--ember);
+    animation: pulse 1.8s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(0.8); }
+  }
+
+  h1.hero-title {
+    font-size: clamp(54px, 6.2vw, 88px);
+    font-weight: 700;
+    line-height: 1.04;
+    letter-spacing: -0.025em;
+  }
+
+  h2.section-title {
+    font-size: clamp(34px, 3.8vw, 54px);
+    font-weight: 600;
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    margin-bottom: 18px;
+  }
+
+  .sub {
+    font-size: clamp(17px, 1.5vw, 22px);
+    line-height: 1.55;
+    color: var(--cream);
+    max-width: 860px;
+  }
+
+  .mono { font-family: var(--font-mono); }
+
+  /* Slide 1: Intro */
+  .intro-wrap {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .logo-img {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-bottom: 26px;
+  }
+  .badge-strip {
+    margin-top: 38px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    width: 100%;
+    max-width: 1120px;
+  }
+  .badge-cell {
+    padding: 20px 22px;
+    text-align: left;
+    border-right: 1px solid var(--border);
+  }
+  .badge-cell:last-child { border-right: none; }
+  .badge-cell .idx {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ember);
+    letter-spacing: 0.2em;
+    margin-bottom: 6px;
+  }
+  .badge-cell .val {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--bone);
+  }
+  .badge-cell .desc {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* Slide 2: Problem vs Solution */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    margin-top: 30px;
+  }
+  .panel {
+    padding: 32px;
+  }
+  .panel-header {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding-bottom: 14px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+  }
+  .bullet-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .bullet-list li {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    font-size: 17px;
+    line-height: 1.5;
+    color: var(--cream);
+  }
+  .bullet-mark {
+    font-family: var(--font-mono);
+    color: var(--ember);
+    font-weight: 700;
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+  .bullet-mark.dim { color: var(--dim); }
+
+  /* Slide 3: 4-Stage Architecture Flow */
+  .arch-channels {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+    margin-top: 24px;
+  }
+  .arch-box {
+    padding: 18px 20px;
+    border: 1px solid var(--border);
+    background: rgba(12, 11, 10, 0.92);
+  }
+  .arch-box.ember-border {
+    border-color: rgba(217, 93, 36, 0.65);
+    background: rgba(20, 13, 9, 0.94);
+  }
+  .arch-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ember-glow);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .arch-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--bone);
+  }
+  .arch-desc {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 5px;
+    line-height: 1.45;
+  }
+
+  .flow-arrow-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 36px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ember);
+    letter-spacing: 0.25em;
+  }
+
+  .pipeline-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    position: relative;
+  }
+  .stage-card {
+    padding: 20px;
+    border: 1px solid var(--border);
+    background: #080807;
+    transition: border-color 0.3s ease, background 0.3s ease;
+  }
+  .stage-card.lit {
+    border-color: var(--ember);
+    background: #170E09;
+    box-shadow: inset 0 0 0 1px rgba(217, 93, 36, 0.25);
+  }
+
+  /* Slide 4: Voice Streaming Comparison */
+  .voice-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 28px;
+    margin-top: 26px;
+    align-items: stretch;
+  }
+  .timeline-bar-wrap {
+    margin-top: 14px;
+    margin-bottom: 22px;
+  }
+  .timeline-label {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--cream);
+    margin-bottom: 8px;
+  }
+  .bar-track {
+    height: 34px;
+    background: #060606;
+    border: 1px solid var(--border);
+    display: flex;
+    overflow: hidden;
+  }
+  .seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .seg-wait { background: #1D1A18; color: var(--muted); }
+  .seg-tts { background: #5A2811; color: var(--ember-hot); }
+  .seg-fast { background: var(--ember); color: #060606; }
+  .seg-stream { background: #2D180E; color: var(--ember-glow); border-left: 1px solid var(--ember); }
+
+  #voice-wave-canvas {
+    width: 100%;
+    height: 190px;
+    display: block;
+    background: #060606;
+  }
+
+  /* Slide 5: Code RAG & Ollama */
+  .model-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .model-chip {
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    background: #060606;
+    font-family: var(--font-mono);
+  }
+  .model-chip .mname {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--bone);
+  }
+  .model-chip .mtag {
+    font-size: 10px;
+    color: var(--ember-glow);
+    margin-top: 3px;
+    text-transform: uppercase;
+  }
+
+  /* Slide 6: Outro */
+  .code-block {
+    margin-top: 28px;
+    width: 100%;
+    max-width: 760px;
+    text-align: left;
+    padding: 24px 28px;
+    font-family: var(--font-mono);
+    font-size: 16px;
+    line-height: 1.85;
+    color: var(--bone);
+  }
+  .code-block .cmd-prompt { color: var(--ember); margin-right: 10px; }
+  .code-block .comment { color: var(--dim); }
+
+  /* Subtle bottom presenter HUD (press H to hide completely for recording) */
+  #hud {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    background: rgba(7, 6, 6, 0.88);
+    backdrop-filter: blur(6px);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    transition: opacity 0.25s ease;
+  }
+  #hud.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  #hud button {
+    background: #120E0B;
+    border: 1px solid var(--border);
+    color: var(--cream);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  #hud button:hover {
+    border-color: var(--ember);
+    color: var(--bone);
+  }
+  .slide-counter {
+    color: var(--ember-glow);
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<canvas id="ascii-bg"></canvas>
+<div class="vignette"></div>
+
+<main id="stage">
+  <!-- SLIDE 1: CINEMATIC INTRO -->
+  <section class="slide active" data-title="Intro">
+    <div class="intro-wrap stagger">
+      <img
+        src="../../logo.png"
+        alt="ORBIT"
+        class="logo-img"
+        onerror="this.style.display='none'"
+      />
+      <div class="eyebrow">
+        <span class="eyebrow-dot"></span>
+        <span>ORBIT // NEURAL OS · 100% LOCAL RUNTIME</span>
+      </div>
+      <h1 class="hero-title">
+        A calmer local AI<br />
+        <span style="color: var(--cream);">built around how you work.</span>
+      </h1>
+      <p class="sub" style="margin-top: 22px;">
+        Private local LLM (any Ollama model), sentence-streamed Live Voice, adaptive code-folder RAG,
+        tasks, habits, reminders, analytics, and Discord voice — all powered by one local SQLite brain.
+      </p>
+
+      <div class="ascii-frame badge-strip">
+        <div class="badge-cell">
+          <div class="idx">01 // PRIVACY</div>
+          <div class="val">100% Local-First</div>
+          <div class="desc">Ollama + SQLite WAL + Phonon TTS</div>
+        </div>
+        <div class="badge-cell">
+          <div class="idx">02 // VOICE</div>
+          <div class="val">Ctrl + Space Live</div>
+          <div class="desc">Sentence-streamed low-latency audio</div>
+        </div>
+        <div class="badge-cell">
+          <div class="idx">03 // LEARNING</div>
+          <div class="val">Hybrid Code RAG</div>
+          <div class="desc">Reads real local practice folders</div>
+        </div>
+        <div class="badge-cell">
+          <div class="idx">04 // CHANNELS</div>
+          <div class="val">Web + Discord VC</div>
+          <div class="desc">One shared memory & tool engine</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 2: WHY ORBIT / THE PROBLEM -->
+  <section class="slide" data-title="Why ORBIT">
+    <div class="stagger">
+      <div class="eyebrow">01 // THE PROBLEM &amp; PHILOSOPHY</div>
+      <h2 class="section-title">Why I built <span style="color: var(--ember);">ORBIT</span>.</h2>
+      <p class="sub">
+        Most productivity stacks split your life across 6 disconnected cloud apps that never talk to each other.
+        ORBIT orbits around your daily workflow in one private local database.
+      </p>
+
+      <div class="two-col">
+        <div class="ascii-frame panel">
+          <div class="panel-header">
+            <span style="color: var(--muted);">TYPICAL FRAGMENTED STACK</span>
+            <span style="color: var(--dim);">[CLOUD SILOS]</span>
+          </div>
+          <ul class="bullet-list">
+            <li><span class="bullet-mark dim">×</span><span>To-do app doesn't know what you're studying or coding locally.</span></li>
+            <li><span class="bullet-mark dim">×</span><span>Cloud chatbots forget your projects and send private notes off-device.</span></li>
+            <li><span class="bullet-mark dim">×</span><span>Voice assistants wait for full paragraphs before speaking — slow &amp; robotic.</span></li>
+            <li><span class="bullet-mark dim">×</span><span>Locked to one expensive cloud API or rigid model schema.</span></li>
+          </ul>
+        </div>
+
+        <div class="ascii-frame panel" style="border-color: rgba(217, 93, 36, 0.55); background: rgba(16, 11, 8, 0.92);">
+          <div class="panel-header">
+            <span style="color: var(--ember-glow);">ORBIT // UNIFIED LOCAL OS</span>
+            <span style="color: var(--ember);">[100% LOCAL]</span>
+          </div>
+          <ul class="bullet-list">
+            <li><span class="bullet-mark">■</span><span><strong>One local SQLite WAL brain</strong> unifies tasks, habits, roadmaps, code files, reminders &amp; memory.</span></li>
+            <li><span class="bullet-mark">■</span><span><strong>Zero cloud lock-in:</strong> runs any local Ollama model + optional Gemini BYOK anytime.</span></li>
+            <li><span class="bullet-mark">■</span><span><strong>Natural voice &amp; Discord calls</strong> that trigger real tools &amp; speak cleanly without raw file extensions.</span></li>
+            <li><span class="bullet-mark">■</span><span><strong>Proactive &amp; calm:</strong> nudges next learning topics when your code folder changes.</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 3: HOW IT WORKS — 4-STAGE ARCHITECTURE -->
+  <section class="slide" data-title="Architecture">
+    <div class="stagger">
+      <div class="eyebrow">02 // SYSTEM ARCHITECTURE · HOW IT WORKS</div>
+      <h2 class="section-title">Unified 4-Stage Turn Orchestrator</h2>
+      <p class="sub">
+        Every channel — Web Chat, Live Voice, and Discord — flows through the exact same FastAPI pipeline
+        (<span class="mono" style="color: var(--ember-hot);">services/turn_orchestrator.py</span>).
+      </p>
+
+      <div class="arch-channels">
+        <div class="arch-box">
+          <div class="arch-tag">CHANNEL 01</div>
+          <div class="arch-title">React 19 ASCII Workspace</div>
+          <div class="arch-desc">SSE token stream · Top Navbar · Topographic ASCII canvas</div>
+        </div>
+        <div class="arch-box">
+          <div class="arch-tag">CHANNEL 02</div>
+          <div class="arch-title">Live Voice Mode (/ws/voice)</div>
+          <div class="arch-desc">16 kHz PCM AudioWorklet · Pre-roll VAD · Barge-in</div>
+        </div>
+        <div class="arch-box">
+          <div class="arch-tag">CHANNEL 03</div>
+          <div class="arch-title">Discord Text &amp; Voice Bot</div>
+          <div class="arch-desc">In-process bot · DAVE E2EE Opus receive · PCMAudio TTS</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow-row">▼ &nbsp;&nbsp;&nbsp; UNIFIED FASTAPI TURN PIPELINE &nbsp;&nbsp;&nbsp; ▼</div>
+
+      <div class="pipeline-row" id="arch-pipeline">
+        <div class="stage-card lit" data-stage="0">
+          <div class="arch-tag">STAGE 01 · SAFETY</div>
+          <div class="arch-title">Confirmation Gate</div>
+          <div class="arch-desc">Intercepts yes/no before any destructive delete executes.</div>
+        </div>
+        <div class="stage-card" data-stage="1">
+          <div class="arch-tag">STAGE 02 · &lt;2 MS</div>
+          <div class="arch-title">Deterministic Router</div>
+          <div class="arch-desc">Instant zero-LLM execution for tasks, habits, reminders &amp; nav.</div>
+        </div>
+        <div class="stage-card" data-stage="2">
+          <div class="arch-tag">STAGE 03 · CONTEXT</div>
+          <div class="arch-title">Memory + Code RAG</div>
+          <div class="arch-desc">Short follow-up resolution, lexical-concept recall &amp; FTS5 code snippets.</div>
+        </div>
+        <div class="stage-card" data-stage="3">
+          <div class="arch-tag">STAGE 04 · TOOLS</div>
+          <div class="arch-title">Streaming Tool Loop</div>
+          <div class="arch-desc">Native RapidFuzz tools over shared aiohttp pool · auto-adapts to any model.</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow-row">▼ &nbsp;&nbsp;&nbsp; LOCAL DATA &amp; INFERENCE LAYER &nbsp;&nbsp;&nbsp; ▼</div>
+
+      <div class="arch-channels">
+        <div class="arch-box ember-border">
+          <div class="arch-tag">LLM INFERENCE</div>
+          <div class="arch-title">Any Ollama Model (+ Gemini BYOK)</div>
+          <div class="arch-desc">qwen3.5 · llama3.2 · gemma3 · deepseek-r1 · mistral · phi4</div>
+        </div>
+        <div class="arch-box ember-border">
+          <div class="arch-tag">STORAGE &amp; SCHEDULER</div>
+          <div class="arch-title">Thread-Local SQLite WAL + FTS5</div>
+          <div class="arch-desc">Zero per-query PRAGMA churn · APScheduler reminders &amp; coach</div>
+        </div>
+        <div class="arch-box ember-border">
+          <div class="arch-tag">SPEECH ENGINE</div>
+          <div class="arch-title">Phonon CPU TTS + Local STT</div>
+          <div class="arch-desc">Gradium phonon-31m-en (q8) + Whisper / SAPI fallback</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 4: LIVE VOICE PIPELINE -->
+  <section class="slide" data-title="Voice Pipeline">
+    <div class="stagger">
+      <div class="eyebrow">03 // REAL-TIME VOICE ENGINEERING</div>
+      <h2 class="section-title">Sentence-Streamed Local Voice (<span style="color: var(--ember);">40–60% Faster</span>)</h2>
+      <p class="sub">
+        Instead of waiting for the entire LLM response before synthesizing speech, ORBIT streams tokens
+        into a sentence buffer and runs Phonon CPU TTS concurrently while the next sentence generates.
+      </p>
+
+      <div class="voice-grid">
+        <div class="ascii-frame panel">
+          <div class="panel-header">
+            <span style="color: var(--ember-glow);">LATENCY COMPARISON (TIME TO FIRST AUDIO)</span>
+            <span style="color: var(--muted);">/ws/voice</span>
+          </div>
+
+          <div class="timeline-bar-wrap">
+            <div class="timeline-label">
+              <span>Traditional Pipeline (Wait for full LLM reply)</span>
+              <span style="color: var(--muted);">~2.8s wait</span>
+            </div>
+            <div class="bar-track">
+              <div class="seg seg-wait" style="width: 15%;">STT</div>
+              <div class="seg seg-wait" style="width: 55%; border-left: 1px solid #2c2824;">Wait for ALL LLM tokens…</div>
+              <div class="seg seg-tts" style="width: 30%;">Synthesize Full TTS</div>
+            </div>
+          </div>
+
+          <div class="timeline-bar-wrap">
+            <div class="timeline-label">
+              <span style="color: var(--bone); font-weight: 600;">ORBIT Concurrent Streaming Pipeline</span>
+              <span style="color: var(--ember-glow); font-weight: 700;">~1.1s first word</span>
+            </div>
+            <div class="bar-track" style="border-color: rgba(217, 93, 36, 0.7);">
+              <div class="seg seg-wait" style="width: 15%;">STT</div>
+              <div class="seg seg-fast" style="width: 22%;">Sent 1 → Audio!</div>
+              <div class="seg seg-stream" style="width: 24%;">Sent 2 Synthesizing…</div>
+              <div class="seg seg-stream" style="width: 20%;">Sent 3…</div>
+            </div>
+          </div>
+
+          <ul class="bullet-list" style="margin-top: 22px; gap: 11px;">
+            <li style="font-size: 15px;"><span class="bullet-mark">■</span><span><strong>500 ms Rolling Pre-Roll VAD:</strong> Never clips your first syllable or bloats PCM with silence.</span></li>
+            <li style="font-size: 15px;"><span class="bullet-mark">■</span><span><strong>Natural Speech Cleaner:</strong> Strips Markdown &amp; file extensions (<code class="mono" style="color: var(--ember-hot);">while_loop.cpp</code> → "while loop").</span></li>
+            <li style="font-size: 15px;"><span class="bullet-mark">■</span><span><strong>Instant Barge-In &amp; CPU Gating:</strong> Background ASCII canvas pauses automatically during Live Mode.</span></li>
+          </ul>
+        </div>
+
+        <div class="ascii-frame panel" style="background: #060606; display: flex; flex-direction: column; justify-content: space-between;">
+          <div class="panel-header" style="margin-bottom: 12px;">
+            <span style="color: var(--ember-glow);">● LIVE HARMONIC MATRIX</span>
+            <span style="color: var(--muted);">16KHZ PCM</span>
+          </div>
+          <canvas id="voice-wave-canvas"></canvas>
+          <div style="margin-top: 16px; border-left: 2px solid var(--ember); background: #0B0A09; padding: 14px 16px;">
+            <div class="mono" style="font-size: 10px; color: var(--ember); letter-spacing: 0.16em;">STREAMING CAPTIONS</div>
+            <div style="margin-top: 6px; font-size: 14px; color: var(--bone); line-height: 1.55;">
+              "You already practiced <strong>Control Flow</strong> in <em>while loop</em>. Ready to mark it done and start <strong>Functions</strong>?"
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 5: CODE RAG + UNIVERSAL OLLAMA -->
+  <section class="slide" data-title="Code RAG & Models">
+    <div class="stagger">
+      <div class="eyebrow">04 // CODE INTELLIGENCE &amp; UNIVERSAL MODELS</div>
+      <h2 class="section-title">Hybrid Code RAG &amp; <span style="color: var(--ember);">Every Ollama Model</span></h2>
+
+      <div class="two-col" style="margin-top: 24px;">
+        <div class="ascii-frame panel">
+          <div class="panel-header">
+            <span style="color: var(--ember-glow);">LOCAL CODE-FOLDER HYBRID RAG</span>
+            <span style="color: var(--muted);">learning/code_rag.py</span>
+          </div>
+          <ul class="bullet-list" style="gap: 14px;">
+            <li style="font-size: 15.5px;"><span class="bullet-mark">01</span><span><strong>Zero-Read Delta Sync:</strong> Skips untouched files via <code class="mono" style="color: var(--ember-hot);">mtime + size</code> before hashing.</span></li>
+            <li style="font-size: 15.5px;"><span class="bullet-mark">02</span><span><strong>11+ Languages &amp; Concepts:</strong> C++, Python, Java, React Hooks, TypeScript, REST APIs, SQL, Rust &amp; Go.</span></li>
+            <li style="font-size: 15.5px;"><span class="bullet-mark">03</span><span><strong>SQLite FTS5 Snippet Search:</strong> Ask ORBIT about your own practice files anytime.</span></li>
+            <li style="font-size: 15.5px;"><span class="bullet-mark">04</span><span><strong>Suggest &amp; Confirm Workflow:</strong> Auto-starts topics on real code and asks before marking complete.</span></li>
+          </ul>
+        </div>
+
+        <div class="ascii-frame panel">
+          <div class="panel-header">
+            <span style="color: var(--ember-glow);">UNIVERSAL OLLAMA ENGINE</span>
+            <span style="color: var(--muted);">ZERO RESTART SWAP</span>
+          </div>
+          <p style="font-size: 15px; color: var(--cream); line-height: 1.55;">
+            Hot-swap or pull <strong>any</strong> model directly in Settings. Models without native tool-calling
+            or <code class="mono" style="color: var(--ember-hot);">think</code> flags automatically adapt to context-injected streaming mode.
+          </p>
+          <div class="model-grid">
+            <div class="model-chip">
+              <div class="mname">qwen3.5:4b</div>
+              <div class="mtag">Default · Tools</div>
+            </div>
+            <div class="model-chip">
+              <div class="mname">llama3.2:3b</div>
+              <div class="mtag">Fast · Tools</div>
+            </div>
+            <div class="model-chip">
+              <div class="mname">gemma3:4b</div>
+              <div class="mtag">Auto-Adapt Stream</div>
+            </div>
+            <div class="model-chip">
+              <div class="mname">deepseek-r1:8b</div>
+              <div class="mtag">Reasoning · Clean</div>
+            </div>
+            <div class="model-chip">
+              <div class="mname">qwen2.5-coder</div>
+              <div class="mtag">Coding Co-Pilot</div>
+            </div>
+            <div class="model-chip">
+              <div class="mname">mistral / phi4</div>
+              <div class="mtag">Any Custom GGUF</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SLIDE 6: OUTRO & QUICKSTART -->
+  <section class="slide" data-title="Outro">
+    <div class="intro-wrap stagger">
+      <img
+        src="../../logo.png"
+        alt="ORBIT"
+        class="logo-img"
+        onerror="this.style.display='none'"
+      />
+      <div class="eyebrow">05 // RUN LOCALLY IN 60 SECONDS</div>
+      <h1 class="hero-title" style="font-size: clamp(46px, 5.2vw, 74px);">
+        Own your assistant.<br />
+        <span style="color: var(--ember);">Keep your calm.</span>
+      </h1>
+
+      <div class="ascii-frame code-block">
+        <div><span class="cmd-prompt">$</span>git clone https://github.com/JayaHaris2007/ORBIT007.git</div>
+        <div><span class="cmd-prompt">$</span>ollama pull qwen3.5:4b</div>
+        <div><span class="cmd-prompt">$</span>python app.py --server <span class="comment"># or launch Spidey Control Center.pyw</span></div>
+      </div>
+
+      <p class="mono" style="margin-top: 28px; font-size: 13px; letter-spacing: 0.18em; color: var(--muted);">
+        100% LOCAL · PYTHON FASTAPI · REACT 19 · OLLAMA · PHONON TTS · SQLITE WAL
+      </p>
+    </div>
+  </section>
+</main>
+
+<!-- Subtle Presenter HUD (Press H to hide before hitting Record in OBS) -->
+<div id="hud">
+  <button id="prev-btn" type="button">← Prev</button>
+  <span class="slide-counter" id="slide-counter">01 / 06 · Intro</span>
+  <button id="next-btn" type="button">Next →</button>
+  <button id="replay-btn" type="button">[R] Replay Anim</button>
+  <button id="fs-btn" type="button">[F] Fullscreen</button>
+  <span>[H] Hide HUD</span>
+</div>
+
+<script>
+  // --- Slide Deck Navigation ---
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const counterEl = document.getElementById('slide-counter');
+  const hudEl = document.getElementById('hud');
+  let current = 0;
+
+  function showSlide(index) {
+    current = (index + slides.length) % slides.length;
+    slides.forEach((s, i) => {
+      s.classList.toggle('active', i === current);
+    });
+    const title = slides[current].dataset.title || '';
+    counterEl.textContent = `${String(current + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')} · ${title}`;
+  }
+
+  function replayCurrent() {
+    const el = slides[current];
+    el.classList.remove('active');
+    void el.offsetWidth;
+    el.classList.add('active');
+  }
+
+  document.getElementById('prev-btn').onclick = () => showSlide(current - 1);
+  document.getElementById('next-btn').onclick = () => showSlide(current + 1);
+  document.getElementById('replay-btn').onclick = replayCurrent;
+  document.getElementById('fs-btn').onclick = () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  };
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+      e.preventDefault(); showSlide(current + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      e.preventDefault(); showSlide(current - 1);
+    } else if (e.key.toLowerCase() === 'r') {
+      replayCurrent();
+    } else if (e.key.toLowerCase() === 'h') {
+      hudEl.classList.toggle('hidden');
+    } else if (e.key.toLowerCase() === 'f') {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+      else document.exitFullscreen?.();
+    } else if (e.key >= '1' && e.key <= String(slides.length)) {
+      showSlide(Number(e.key) - 1);
+    }
+  });
+
+  // Animated stage highlight pulse on Slide 3 Architecture
+  const stageCards = Array.from(document.querySelectorAll('#arch-pipeline .stage-card'));
+  let litIdx = 0;
+  setInterval(() => {
+    litIdx = (litIdx + 1) % stageCards.length;
+    stageCards.forEach((c, i) => c.classList.toggle('lit', i === litIdx));
+  }, 1500);
+
+  // --- Background 3D Topographic ASCII Wave Field ---
+  (function initAsciiBackground() {
+    const canvas = document.getElementById('ascii-bg');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const PALETTE = [
+      '#171513', '#23201d', '#332f2a', '#48423c', '#635b53', '#857c72', '#b0a79d',
+      '#752d0f', '#9e3e15', '#c44f1c', '#d95d24', '#f27029', '#ff944d', '#ffd4a8'
+    ];
+    let cols = 140, rows = 54, cellW = 10, cellH = 16, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let zBuf, charBuf, colorBuf;
+
+    function resize() {
+      const w = window.innerWidth, h = window.innerHeight;
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      cols = Math.max(60, Math.floor(w / cellW));
+      rows = Math.max(28, Math.floor(h / cellH));
+      zBuf = new Float32Array(cols * rows);
+      charBuf = new Uint16Array(cols * rows);
+      colorBuf = new Uint8Array(cols * rows);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    let t = 0, last = performance.now();
+    function frame(now) {
+      requestAnimationFrame(frame);
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      t += dt * 0.72;
+
+      zBuf.fill(0); charBuf.fill(0);
+      const span = Math.max(cols * cellW * 0.48, rows * cellH * 0.78);
+      const fovX = (span * 1.15) / cellW, fovY = (span * 1.15) / cellH;
+      const cx = cols * 0.5, cy = rows * 0.56, camDist = 2.65;
+      const pitch = 0.60 + Math.sin(t * 0.2) * 0.03;
+      const yaw = Math.sin(t * 0.16) * 0.16;
+      const cP = Math.cos(pitch), sP = Math.sin(pitch), cY = Math.cos(yaw), sY = Math.sin(yaw);
+
+      const gx = 78, gz = 44;
+      for (let zi = 0; zi < gz; zi++) {
+        const vz = (zi / (gz - 1) - 0.5) * 3.2;
+        for (let xi = 0; xi < gx; xi++) {
+          const vx = (xi / (gx - 1) - 0.5) * 4.6;
+          const d = Math.hypot(vx * 0.85, vz);
+          const vy = (Math.sin(d * 3.6 - t * 2.0) * Math.exp(-d * 0.34)
+            + Math.sin(vx * 1.85 + t * 0.9) * Math.cos(vz * 1.8 - t * 0.75) * 0.55) * 0.32 - 0.18;
+
+          const x1 = vx * cY + vz * sY;
+          const z1 = -vx * sY + vz * cY;
+          const y2 = vy * cP - z1 * sP;
+          const z2 = vy * sP + z1 * cP;
+          const cz = camDist - z2;
+          if (cz < 0.45) continue;
+          const invZ = 1 / cz;
+          const col = Math.round(cx + x1 * fovX * invZ);
+          const row = Math.round(cy - y2 * fovY * invZ);
+          if (col < 0 || col >= cols || row < 0 || row >= rows) continue;
+          const idx = row * cols + col;
+          if (invZ > zBuf[idx]) {
+            zBuf[idx] = invZ;
+            const elev = Math.max(0, Math.min(1, (vy + 0.55) / 0.90));
+            charBuf[idx] = elev > 0.84 ? 94 : elev > 0.68 ? 47 : elev > 0.52 ? 61 : elev > 0.36 ? 45 : elev > 0.22 ? 58 : 46;
+            colorBuf[idx] = elev > 0.56
+              ? 7 + Math.min(6, Math.floor(((elev - 0.52) / 0.48) * 6.9))
+              : Math.min(6, Math.floor(elev * 8.0));
+          }
+        }
+      }
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#050505';
+      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+      ctx.font = '500 12.5px "JetBrains Mono", Consolas, monospace';
+      ctx.textBaseline = 'top';
+      for (let i = 0; i < cols * rows; i++) {
+        if (!charBuf[i]) continue;
+        const r = (i / cols) | 0, c = i - r * cols;
+        ctx.fillStyle = PALETTE[colorBuf[i]];
+        ctx.fillText(String.fromCharCode(charBuf[i]), c * cellW, r * cellH);
+      }
+    }
+    requestAnimationFrame(frame);
+  })();
+
+  // --- Slide 4 Embedded ASCII Harmonic Voice Wave ---
+  (function initVoiceWave() {
+    const canvas = document.getElementById('voice-wave-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const RAMP = ' .:-=+*#%@';
+    const PAL = ['#1F1C19', '#38332E', '#595149', '#8A8076', '#CFC9BF', '#7A2F10', '#B34517', '#D95D24', '#FF8A3D', '#FFD4A8'];
+    let simT = 0, last = performance.now();
+
+    function draw(now) {
+      requestAnimationFrame(draw);
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      simT += dt * 1.45;
+      const w = canvas.clientWidth || 480, h = canvas.clientHeight || 190;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#060606';
+      ctx.fillRect(0, 0, w, h);
+      ctx.font = '500 12px "JetBrains Mono", Consolas, monospace';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+
+      const cellW = 8.8, cellH = 13.5;
+      const cols = Math.floor(w / cellW), rows = Math.floor(h / cellH);
+      const midRow = (rows - 1) * 0.5;
+      const energy = 0.52 + 0.24 * Math.sin(simT * 4.2) * Math.cos(simT * 1.9);
+
+      for (let c = 0; c < cols; c++) {
+        const u = c / Math.max(1, cols - 1);
+        const taper = Math.pow(Math.sin(u * Math.PI), 1.45);
+        const xNorm = (u - 0.5) * Math.PI * 2;
+        const hVal = (0.45 * Math.abs(Math.sin(xNorm * 2.1 - simT * 3.1))
+          + 0.35 * Math.abs(Math.cos(xNorm * 3.4 + simT * 2.3))
+          + 0.2 * (0.5 + 0.5 * Math.cos(Math.abs(u - 0.5) * 14 - simT * 4.5)));
+        const colH = Math.max(0.6, hVal * (0.3 + energy * 1.05) * (rows * 0.48)) * taper;
+        for (let r = 0; r < rows; r++) {
+          const nd = Math.abs(r - midRow) / Math.max(0.65, colH);
+          if (nd > 1.3) continue;
+          const lum = Math.min(1, Math.exp(-(nd * nd) * 1.8) * (0.48 + hVal * 0.65));
+          if (lum < 0.08) continue;
+          const ch = RAMP[Math.min(RAMP.length - 1, Math.max(1, Math.floor(lum * RAMP.length)))];
+          const isEmber = nd < 0.7;
+          ctx.fillStyle = PAL[isEmber ? 5 + Math.min(4, Math.floor(lum * 5)) : Math.min(4, Math.floor(lum * 5))];
+          ctx.fillText(ch, (c + 0.5) * cellW, (r + 0.5) * cellH);
+        }
+      }
+    }
+    requestAnimationFrame(draw);
+  })();
+</script>
+</body>
+</html>

@@ -250,6 +250,9 @@ AI_DISCORD_ALLOWED_GUILD_IDS=987654321098765432
 # Optional: pin proactive coaching check-ins to a specific channel ID
 AI_DISCORD_NOTIFY_CHANNEL_ID=
 
+# Auto-clear Discord chat context window every N days (default: 3; set 0 to disable)
+AI_DISCORD_CONTEXT_RESET_DAYS=3
+
 # Optional: fine-tune Discord voice VAD sensitivity
 DISCORD_VOICE_ENERGY_THRESHOLD=260.0
 DISCORD_VOICE_SILENCE_SECONDS=0.95
@@ -267,6 +270,7 @@ DISCORD_VOICE_SILENCE_SECONDS=0.95
 - **Mention or prefix commands:**
   - `@ORBIT <question>` or `!ask <question>` / `!input <question>`
   - `!ping` — Instant gateway latency health check
+  - `!reset` / `!clear` / `!new` — Clear your Discord chat context immediately (tasks, habits, reminders & memories stay untouched; also auto-clears every 3 days via `AI_DISCORD_CONTEXT_RESET_DAYS=3`)
   - `!notify here` — Pin scheduled check-ins and proactive recommendations to the current server text channel (falls back to DM if forbidden)
 
 ### Step 6: Using Discord Two-Way Voice Channels

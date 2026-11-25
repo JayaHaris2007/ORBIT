@@ -7,7 +7,7 @@ import threading
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -376,16 +376,57 @@ async def api_delete_reminder(reminder_id: str):
 
 
 @router.get("/api/notifications/{chat_id}")
-def list_notifications(chat_id: str, after_id: int = Query(0)):
+def list_notifications(
+    chat_id: str,
+    after_id: int = Query(0),
+    x_orbit_client_id: Optional[str] = Header(default=None),
+):
     a = _app()
     if not a.memory_store.chat_exists(chat_id):
         raise HTTPException(404, "Conversation not found.")
+    if not a.memory_store.get_external_session(chat_id):
+        a.mark_frontend_active(client_id=x_orbit_client_id or "default", chat_id=chat_id)
     return {"notifications": a.memory_store.list_notifications(chat_id, after_id)}
 
 
 @router.get("/notifications/{chat_id}")
-def compat_list_notifications(chat_id: str, after_id: int = Query(0)):
-    return list_notifications(chat_id, after_id)
+def compat_list_notifications(
+    chat_id: str,
+    after_id: int = Query(0),
+    x_orbit_client_id: Optional[str] = Header(default=None),
+):
+    return list_notifications(chat_id, after_id, x_orbit_client_id)
+
+
+@router.get("/api/frontend/presence")
+def get_frontend_presence():
+    """Return whether a web frontend tab is currently open."""
+    a = _app()
+    return {
+        "active": a.is_frontend_active(),
+        "chat_id": a.get_active_frontend_chat_id(),
+    }
+
+
+@router.post("/api/frontend/presence")
+def update_frontend_presence(
+    payload: dict[str, Any] = Body(default=None),
+    x_orbit_client_id: Optional[str] = Header(default=None),
+):
+    """Record web frontend open/close heartbeats so proactive nudges route to frontend OR Discord."""
+    a = _app()
+    payload = payload if isinstance(payload, dict) else {}
+    active = bool(payload.get("active", True))
+    client_id = str(payload.get("client_id") or x_orbit_client_id or "default").strip() or "default"
+    chat_id = payload.get("chat_id")
+    if active:
+        a.mark_frontend_active(client_id=client_id, chat_id=str(chat_id) if chat_id else None)
+    else:
+        a.mark_frontend_inactive(client_id=client_id)
+    return {
+        "active": a.is_frontend_active(),
+        "client_id": client_id,
+    }
 
 
 @router.get("/api/proactive/suggestions")
@@ -411,7 +452,10 @@ def get_proactive_suggestions(chat_id: str = Query("default")):
 
 
 @router.post("/api/proactive/check-in")
-def trigger_proactive_checkin(payload: dict[str, Any] = Body(default=None)):
+def trigger_proactive_checkin(
+    payload: dict[str, Any] = Body(default=None),
+    x_orbit_client_id: Optional[str] = Header(default=None),
+):
     """Trigger a regular or on-demand proactive check-in for tasks, habits, and learning."""
     a = _app()
     payload = payload if isinstance(payload, dict) else {}
@@ -419,11 +463,16 @@ def trigger_proactive_checkin(payload: dict[str, Any] = Body(default=None)):
     force = bool(payload.get("force", False))
     cooldown_minutes = int(payload.get("cooldown_minutes", 30))
     preferred_category = payload.get("category")
+    source = str(payload.get("source") or "").strip().lower()
+    if source == "frontend" or x_orbit_client_id:
+        a.mark_frontend_active(client_id=x_orbit_client_id or "default", chat_id=chat_id)
+    mirror_to_discord = bool(payload.get("mirror_to_discord", False))
     return a.deliver_proactive_checkin(
         chat_id=chat_id,
         force=force,
         cooldown_minutes=cooldown_minutes,
         preferred_category=preferred_category,
+        mirror_to_discord=mirror_to_discord,
     )
 
 

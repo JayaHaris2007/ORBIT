@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { apiRequest, apiStreamRequest } from '../services/api';
+import { apiRequest, apiStreamRequest, sendFrontendPresence } from '../services/api';
 import { useAppData } from '../context/AppDataContext';
 import { useAuth, useTheme } from '../context/AuthContext';
 import { useSpideyBrain } from '../context/SpideyBrainContext';
@@ -462,12 +462,41 @@ export default function SpideyWorkspace() {
     }, [chatId, refresh, showSectionToast, voice, voiceSession.state]);
 
     useEffect(() => {
+        sendFrontendPresence(true, activeChatRef.current || null);
+        const heartbeat = window.setInterval(() => {
+            sendFrontendPresence(true, activeChatRef.current || null);
+        }, 30 * 1000);
+        const handlePageShow = () => {
+            sendFrontendPresence(true, activeChatRef.current || null);
+        };
+        const handlePageClose = () => {
+            sendFrontendPresence(false, activeChatRef.current || null, { keepalive: true });
+        };
+        window.addEventListener('pageshow', handlePageShow);
+        window.addEventListener('pagehide', handlePageClose);
+        window.addEventListener('beforeunload', handlePageClose);
+        return () => {
+            window.clearInterval(heartbeat);
+            window.removeEventListener('pageshow', handlePageShow);
+            window.removeEventListener('pagehide', handlePageClose);
+            window.removeEventListener('beforeunload', handlePageClose);
+            sendFrontendPresence(false, activeChatRef.current || null, { keepalive: true });
+        };
+    }, []);
+
+    useEffect(() => {
         if (!chatId) return undefined;
+        sendFrontendPresence(true, chatId);
         const triggerCheckin = async () => {
             try {
                 await apiRequest('/api/proactive/check-in', {
                     method: 'POST',
-                    body: JSON.stringify({ chat_id: chatId, cooldown_minutes: 30 }),
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        cooldown_minutes: 30,
+                        source: 'frontend',
+                        mirror_to_discord: false,
+                    }),
                 });
             } catch { /* ignore */ }
         };

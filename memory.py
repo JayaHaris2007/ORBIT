@@ -333,6 +333,55 @@ class MemoryStore:
         with self.connect() as connection:
             connection.execute("DELETE FROM conversations")
 
+    def clear_chat_messages(self, chat_id: str) -> int:
+        """Delete all messages in a single conversation while preserving the chat row and all user data."""
+        with self.connect() as connection:
+            cur = connection.execute(
+                "DELETE FROM messages WHERE conversation_id = ?", (chat_id,)
+            )
+            connection.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                (_now(), chat_id),
+            )
+            return max(0, cur.rowcount)
+
+    def clear_stale_chat_messages(self, chat_id: str, max_age_days: float = 3.0) -> int:
+        """Clear all messages in ``chat_id`` once its oldest message is >= ``max_age_days`` old."""
+        if max_age_days <= 0:
+            return 0
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT MIN(created_at) AS oldest_at, COUNT(*) AS cnt "
+                "FROM messages WHERE conversation_id = ?",
+                (chat_id,),
+            ).fetchone()
+        if not row or not row["cnt"] or not row["oldest_at"]:
+            return 0
+        try:
+            oldest_dt = datetime.fromisoformat(str(row["oldest_at"]).replace("Z", "+00:00"))
+            if oldest_dt.tzinfo is None:
+                oldest_dt = oldest_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return 0
+        age = datetime.now(timezone.utc) - oldest_dt
+        if age >= timedelta(days=max_age_days):
+            return self.clear_chat_messages(chat_id)
+        return 0
+
+    def reset_stale_external_chats(
+        self, provider: str, max_age_days: float = 3.0
+    ) -> dict[str, int]:
+        """Clear message history for every external chat of ``provider`` whose window reached ``max_age_days``."""
+        if max_age_days <= 0:
+            return {}
+        cleared: dict[str, int] = {}
+        for item in self.list_external_chats(provider):
+            cid = item["id"]
+            removed = self.clear_stale_chat_messages(cid, max_age_days=max_age_days)
+            if removed > 0:
+                cleared[cid] = removed
+        return cleared
+
     def get_or_create_external_chat(
         self, provider: str, external_user_id: str
     ) -> dict[str, Any]:

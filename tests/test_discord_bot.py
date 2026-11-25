@@ -257,3 +257,67 @@ def test_proactive_recommendation_routes_to_server_channel_and_speaks_in_voice_c
     asyncio.run(_test())
 
 
+def test_discord_context_auto_resets_every_3_days_and_preserves_data(temp_db, monkeypatch):
+    """Discord chat messages auto-clear once >= 3 days old while keeping memories, tasks & session link."""
+    from datetime import datetime, timedelta, timezone
+    import discord_bot
+
+    monkeypatch.setenv("AI_DISCORD_CONTEXT_RESET_DAYS", "3")
+
+    chat = temp_db.get_or_create_external_chat("discord", "55555")
+    cid = chat["id"]
+    temp_db.add_memory("My favorite language is Python.")
+    temp_db.create_task("Keep this task safe", priority="high")
+    temp_db.add_message(cid, "user", "Old topic from 2 days ago")
+    temp_db.add_message(cid, "assistant", "Recent reply")
+
+    # 2 days old -> should NOT clear yet
+    two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    with temp_db.connect() as conn:
+        conn.execute("UPDATE messages SET created_at = ? WHERE conversation_id = ?", (two_days_ago, cid))
+
+    assert discord_bot._reset_stale_discord_contexts() == {}
+    assert len(temp_db.get_messages(cid)) == 2
+
+    # 3.1 days old -> MUST clear Discord chat context automatically
+    over_three_days = (datetime.now(timezone.utc) - timedelta(days=3, hours=2)).isoformat()
+    with temp_db.connect() as conn:
+        conn.execute(
+            "UPDATE messages SET created_at = ? WHERE conversation_id = ? AND role = 'user'",
+            (over_three_days, cid),
+        )
+
+    cleared = discord_bot._reset_stale_discord_contexts()
+    assert cleared == {cid: 2}
+    assert temp_db.get_messages(cid) == []
+    # Session link, memories, and tasks remain intact
+    assert temp_db.get_or_create_external_chat("discord", "55555")["id"] == cid
+    assert len(temp_db.list_memories()) == 1
+    assert len(temp_db.list_tasks()) == 1
+
+
+def test_discord_manual_reset_command_clears_chat_context(temp_db, monkeypatch):
+    """!reset immediately clears the caller's Discord chat messages while preserving saved data."""
+    import discord_bot
+
+    monkeypatch.setattr(discord_bot.bot, "allowed_user_ids", set())
+    monkeypatch.setattr(discord_bot.bot, "allowed_guild_ids", set())
+
+    chat = temp_db.get_or_create_external_chat("discord", "77777")
+    cid = chat["id"]
+    temp_db.add_message(cid, "user", "Hello")
+    temp_db.add_message(cid, "assistant", "Hi there")
+    assert len(temp_db.get_messages(cid)) == 2
+
+    ctx = MagicMock()
+    ctx.author = MagicMock(id=77777)
+    ctx.message = MagicMock(author=ctx.author, guild=None)
+    ctx.reply = AsyncMock()
+
+    asyncio.run(discord_bot.reset_context_command.callback(ctx))
+
+    assert temp_db.get_messages(cid) == []
+    ctx.reply.assert_awaited_once()
+    assert "Cleared your Discord chat context (2 message(s) removed)" in ctx.reply.call_args[0][0]
+
+

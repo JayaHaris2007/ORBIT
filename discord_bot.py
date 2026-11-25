@@ -26,6 +26,52 @@ DISCORD_PROVIDER = "discord"
 DISCORD_MAX_MESSAGE_LENGTH = 2_000
 DISCORD_NOTIFICATION_POLL_SECONDS = 5
 DISCORD_LOCK_PORT = 47653
+DISCORD_CONTEXT_RESET_JOB_ID = "discord-context-reset"
+
+
+def _discord_context_reset_days() -> float:
+    raw = os.environ.get("AI_DISCORD_CONTEXT_RESET_DAYS", "3").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 3.0
+
+
+def _reset_stale_discord_contexts() -> dict[str, int]:
+    """Scheduled & startup sweep: clear Discord chat context windows older than AI_DISCORD_CONTEXT_RESET_DAYS."""
+    days = _discord_context_reset_days()
+    if days <= 0:
+        return {}
+    try:
+        cleared = app.memory_store.reset_stale_external_chats(DISCORD_PROVIDER, max_age_days=days)
+        for cid, count in cleared.items():
+            LOGGER.info(
+                "Auto-cleared %d message(s) in Discord chat %s (%.1f-day context reset).",
+                count,
+                cid,
+                days,
+            )
+        return cleared
+    except Exception as exc:
+        LOGGER.warning("Discord stale context sweep failed: %s", exc)
+        return {}
+
+
+def _schedule_discord_context_reset() -> None:
+    days = _discord_context_reset_days()
+    if days <= 0:
+        return
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        app.reminder_scheduler.add_job(
+            _reset_stale_discord_contexts,
+            IntervalTrigger(hours=6, timezone=app.LOCAL_TIMEZONE),
+            id=DISCORD_CONTEXT_RESET_JOB_ID,
+            replace_existing=True,
+        )
+    except Exception as exc:
+        LOGGER.debug("Could not schedule Discord context reset job: %s", exc)
 
 
 _single_instance_guard: socket.socket | None = None
@@ -174,10 +220,13 @@ class SpideyBot(commands.Bot):
         app._restore_reminders(provider=DISCORD_PROVIDER)
         ready = app.init_learning_module(DISCORD_PROVIDER)
         app.schedule_proactive_coach(DISCORD_PROVIDER)
+        await asyncio.to_thread(_reset_stale_discord_contexts)
+        _schedule_discord_context_reset()
         LOGGER.info(
-            "Learning module %s; Discord weekly nudge %s; proactive coach scheduled.",
+            "Learning module %s; Discord weekly nudge %s; proactive coach & %.0f-day context reset scheduled.",
             "initialized" if ready else "NOT available",
             "scheduled" if ready else "not scheduled",
+            _discord_context_reset_days(),
         )
         asyncio.create_task(self.deliver_notifications())
         LOGGER.info(
@@ -332,6 +381,17 @@ class SpideyBot(commands.Bot):
                             continue
 
                         reminder_id = notification.get("reminder_id")
+                        # Never send proactive coaching / code-suggestion nudges to Discord while the web frontend is open
+                        if app.is_proactive_notification_key(reminder_id) and app.is_frontend_active():
+                            self.last_notification_id[chat_id] = notification["id"]
+                            app.memory_store.set_external_last_notification_id(chat_id, notification["id"])
+                            LOGGER.info(
+                                "Skipped proactive notification %s (%s) on Discord because web frontend is open.",
+                                notification["id"],
+                                reminder_id,
+                            )
+                            continue
+
                         target = None
                         if reminder_id:
                             try:
@@ -520,6 +580,20 @@ class SpideyBot(commands.Bot):
         if message.guild is not None:
             await self.remember_server_channel(message.author.id, message.guild.id, message.channel.id)
 
+        # Auto-reset Discord chat context window once every AI_DISCORD_CONTEXT_RESET_DAYS (default 3 days)
+        reset_days = _discord_context_reset_days()
+        if reset_days > 0:
+            cleared_cnt = await asyncio.to_thread(
+                app.memory_store.clear_stale_chat_messages, chat_id, reset_days
+            )
+            if cleared_cnt > 0:
+                LOGGER.info(
+                    "Auto-cleared %d message(s) in Discord chat %s before reply (%.1f-day window).",
+                    cleared_cnt,
+                    chat_id,
+                    reset_days,
+                )
+
         existing_reminders = {
             r["id"] for r in app.memory_store.list_reminders(active_only=True)
         }
@@ -637,6 +711,24 @@ async def ping_command(ctx: commands.Context[Any]) -> None:
     latency = bot.latency * 1000
     detail = f"{round(latency)} ms" if latency > 0 else "unavailable"
     await ctx.reply(f"Online. Gateway latency {detail}.")
+
+
+@bot.command(name="reset", aliases=["clear", "new"])
+async def reset_context_command(ctx: commands.Context[Any]) -> None:
+    """Clear the caller's Discord chat context window immediately (keeps tasks, habits, reminders, memories)."""
+    if not bot.is_allowed(ctx.message):
+        await ctx.reply("You are not authorized to use this assistant.")
+        return
+    chat = app.memory_store.get_or_create_external_chat(
+        DISCORD_PROVIDER, str(ctx.author.id)
+    )
+    removed = await asyncio.to_thread(app.memory_store.clear_chat_messages, chat["id"])
+    days = _discord_context_reset_days()
+    auto_note = f" (also auto-resets every {int(days) if days.is_integer() else days} days)" if days > 0 else ""
+    await ctx.reply(
+        f"Cleared your Discord chat context ({removed} message(s) removed){auto_note}. "
+        "Your tasks, habits, reminders, and saved memories are untouched."
+    )
 
 
 _NATURAL_JOIN_VOICE_RE = re.compile(

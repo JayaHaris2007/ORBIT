@@ -2,6 +2,37 @@ const defaultBase = typeof window !== 'undefined' ? window.location.origin : 'ht
 const API_BASE_URL = (import.meta.env.VITE_SPIDEY_API_BASE_URL || defaultBase).replace(/\/$/, '');
 const ORBIT_TOKEN = (import.meta.env.VITE_ORBIT_TOKEN || '').trim();
 
+export const FRONTEND_CLIENT_ID = (
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `tab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+);
+
+export const sendFrontendPresence = (active, chatId = null, { keepalive = false } = {}) => {
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Orbit-Client-Id': FRONTEND_CLIENT_ID,
+    };
+    if (ORBIT_TOKEN) {
+        headers['x-orbit-token'] = ORBIT_TOKEN;
+    }
+    const payload = {
+        active: Boolean(active),
+        client_id: FRONTEND_CLIENT_ID,
+        ...(chatId ? { chat_id: chatId } : {}),
+    };
+    try {
+        return fetch(`${API_BASE_URL}/api/frontend/presence`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+            keepalive: Boolean(keepalive),
+        }).catch(() => {});
+    } catch {
+        return Promise.resolve();
+    }
+};
+
 export const GEMINI_KEY_STORAGE = 'spidey_gemini_api_key';
 export const GEMINI_MODEL_STORAGE = 'spidey_gemini_model';
 export const OLLAMA_MODEL_STORAGE = 'spidey_ollama_model';
@@ -49,6 +80,7 @@ export const getGeminiHeaders = () => {
 export const apiRequest = async (path, options = {}) => {
     const headers = {
         'Content-Type': 'application/json',
+        'X-Orbit-Client-Id': FRONTEND_CLIENT_ID,
         ...getGeminiHeaders(),
         ...(options.headers || {})
     };

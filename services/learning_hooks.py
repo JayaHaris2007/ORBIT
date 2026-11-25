@@ -71,7 +71,7 @@ DEFAULT_FOLDER_SYNC_MINUTES = int(os.environ.get("ORBIT_FOLDER_SYNC_MINUTES", "2
 
 
 def _notify_new_code_suggestions(sync_results: list[dict]) -> None:
-    """When newly added/edited code matches a topic, ask the user in chat whether to mark it completed."""
+    """When newly added/edited code matches a topic, notify frontend (if open) or Discord (if closed)."""
     a = _app()
     new_items: list[dict] = []
     for res in sync_results:
@@ -80,12 +80,6 @@ def _notify_new_code_suggestions(sync_results: list[dict]) -> None:
     if not new_items:
         return
     try:
-        chat_ids = a.memory_store.list_local_chat_ids()
-        if not chat_ids:
-            a._ensure_chat_exists(a.DEFAULT_CHAT_ID)
-            chat_ids = [a.DEFAULT_CHAT_ID]
-        target_chat = chat_ids[0]
-
         if len(new_items) == 1:
             s = new_items[0]
             msg = (
@@ -104,11 +98,27 @@ def _notify_new_code_suggestions(sync_results: list[dict]) -> None:
             )
             notif_key = f"code-sugg-batch-{new_items[0]['topic_id']}-{len(new_items)}"
 
-        a.memory_store.add_notification(target_chat, notif_key, msg)
-        try:
-            a._push_reminder_alert({"id": notif_key, "chat_id": target_chat, "text": msg}, msg)
-        except Exception:
-            pass
+        if a.is_frontend_active():
+            active_cid = a.get_active_frontend_chat_id()
+            if active_cid and a.memory_store.chat_exists(active_cid) and not a.memory_store.get_external_session(active_cid):
+                target_chat = active_cid
+            else:
+                chat_ids = a.memory_store.list_local_chat_ids()
+                if not chat_ids:
+                    a._ensure_chat_exists(a.DEFAULT_CHAT_ID)
+                    chat_ids = [a.DEFAULT_CHAT_ID]
+                target_chat = chat_ids[0]
+
+            a.memory_store.add_notification(target_chat, notif_key, msg)
+            try:
+                a._push_reminder_alert({"id": notif_key, "chat_id": target_chat, "text": msg}, msg)
+            except Exception:
+                pass
+        else:
+            discord_chats = a.memory_store.list_external_chats("discord")
+            for idx, d_chat in enumerate(discord_chats):
+                d_key = notif_key if idx == 0 else f"{notif_key}-{idx}"
+                a.memory_store.add_notification(d_chat["id"], d_key, msg)
     except Exception as error:  # pragma: no cover - defensive
         a.LOGGER.debug("Code suggestion notification skipped: %s", error)
 
@@ -145,23 +155,38 @@ def _schedule_folder_sync(provider: str = "local") -> None:
 
 
 def _weekly_learning_nudge(provider: str = "local") -> None:
-    """Monday-morning recap for one provider's chats, at most weekly each."""
-    if not _app().learning_schema.is_initialized():
+    """Monday-morning recap routed exclusively to frontend (when open) or Discord (when closed)."""
+    a = _app()
+    if not a.learning_schema.is_initialized():
         return
     try:
+        frontend_open = a.is_frontend_active()
         if provider == "discord":
+            if frontend_open:
+                return
             chat_ids = [
-                chat["id"] for chat in _app().memory_store.list_external_chats("discord")
+                chat["id"] for chat in a.memory_store.list_external_chats("discord")
             ]
         else:
-            chat_ids = _app().memory_store.list_local_chat_ids()
-        _app().learning_nudges.deliver_weekly_nudge(
+            if not frontend_open:
+                chat_ids = [
+                    chat["id"] for chat in a.memory_store.list_external_chats("discord")
+                ]
+            else:
+                active_cid = a.get_active_frontend_chat_id()
+                if active_cid and a.memory_store.chat_exists(active_cid) and not a.memory_store.get_external_session(active_cid):
+                    chat_ids = [active_cid]
+                else:
+                    chat_ids = a.memory_store.list_local_chat_ids()[:1]
+        if not chat_ids:
+            return
+        a.learning_nudges.deliver_weekly_nudge(
             chat_ids,
-            _app().memory_store.add_notification,
-            recently_sent=_app().memory_store.has_recent_weekly_nudge,
+            a.memory_store.add_notification,
+            recently_sent=a.memory_store.has_recent_weekly_nudge,
         )
     except Exception as error:  # pragma: no cover - defensive
-        _app().LOGGER.debug("Weekly learning nudge skipped: %s", error)
+        a.LOGGER.debug("Weekly learning nudge skipped: %s", error)
 
 
 def _schedule_weekly_learning_nudge(provider: str = "local") -> None:

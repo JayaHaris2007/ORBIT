@@ -172,3 +172,128 @@ def test_proactive_checkin_uses_natural_friend_tone_without_robotic_labels(temp_
             assert forbidden.lower() not in msg.lower(), f"Robotic phrase {forbidden!r} found in {msg!r}"
 
 
+def test_proactive_checkin_goes_only_to_frontend_when_frontend_is_open(temp_db):
+    web_chat = app.memory_store.create_chat()
+    discord_chat = app.memory_store.get_or_create_external_chat("discord", "987654321")
+    app.memory_store.create_task("Practice binary search", priority="high")
+    daytime = datetime(2026, 11, 20, 11, 0, tzinfo=app.LOCAL_TIMEZONE)
+
+    # Simulate frontend tab being open
+    app.mark_frontend_active(client_id="win-tab-1", chat_id=web_chat["id"])
+    assert app.is_frontend_active() is True
+
+    # Scheduled Discord coach job must send NOTHING while frontend is open
+    assert app.run_scheduled_proactive_checkins("discord", now=daytime) == 0
+    assert app.memory_store.list_notifications(discord_chat["id"], after_id=0) == []
+
+    # Scheduled local coach job must send ONLY to frontend (zero to Discord)
+    assert app.run_scheduled_proactive_checkins("local", now=daytime) == 1
+    assert len(app.memory_store.list_notifications(web_chat["id"], after_id=0)) == 1
+    assert app.memory_store.list_notifications(discord_chat["id"], after_id=0) == []
+
+    # Even forced check-in from an open frontend must NOT mirror to Discord
+    res = app.deliver_proactive_checkin(chat_id=web_chat["id"], force=True, now=daytime)
+    assert res["nudge"] is True
+    assert res["discord_delivered"] == 0
+    assert app.memory_store.list_notifications(discord_chat["id"], after_id=0) == []
+
+
+def test_proactive_checkin_goes_only_to_discord_when_frontend_is_closed(temp_db):
+    web_chat = app.memory_store.create_chat()
+    discord_chat = app.memory_store.get_or_create_external_chat("discord", "987654321")
+    app.memory_store.create_task("Review graph traversal", priority="high")
+    daytime = datetime(2026, 11, 20, 11, 0, tzinfo=app.LOCAL_TIMEZONE)
+
+    # Frontend is NOT open
+    app.mark_frontend_inactive()
+    assert app.is_frontend_active() is False
+
+    # Scheduled local job routes exclusively to Discord (does NOT pile up in closed web chat)
+    assert app.run_scheduled_proactive_checkins("local", now=daytime) == 1
+    assert app.memory_store.list_notifications(web_chat["id"], after_id=0) == []
+    discord_notifs = app.memory_store.list_notifications(discord_chat["id"], after_id=0)
+    assert len(discord_notifs) == 1
+    assert "Review graph traversal" in discord_notifs[0]["content"]
+
+    # Subsequent Discord scheduled job respects cooldown (no duplicate spam)
+    assert app.run_scheduled_proactive_checkins("discord", now=daytime) == 0
+
+
+def test_code_suggestion_nudges_respect_frontend_open_state(temp_db):
+    from services.learning_hooks import _notify_new_code_suggestions
+
+    web_chat = app.memory_store.create_chat()
+    discord_chat = app.memory_store.get_or_create_external_chat("discord", "555111222")
+    sync_results = [
+        {
+            "new_suggestions": [
+                {
+                    "topic_id": 42,
+                    "topic_name": "Control Flow",
+                    "roadmap_name": "C++ with DSA",
+                    "files": "while_loop.cpp, if_else.cpp",
+                    "reason": "matched control flow constructs",
+                }
+            ]
+        }
+    ]
+
+    # 1. Frontend open -> frontend ONLY
+    app.mark_frontend_active(client_id="tab-a", chat_id=web_chat["id"])
+    _notify_new_code_suggestions(sync_results)
+    assert len(app.memory_store.list_notifications(web_chat["id"], after_id=0)) == 1
+    assert app.memory_store.list_notifications(discord_chat["id"], after_id=0) == []
+
+    # 2. Frontend closed -> Discord ONLY (no new web notification)
+    app.mark_frontend_inactive("tab-a")
+    _notify_new_code_suggestions(sync_results)
+    assert len(app.memory_store.list_notifications(web_chat["id"], after_id=0)) == 1
+    assert len(app.memory_store.list_notifications(discord_chat["id"], after_id=0)) == 1
+
+
+def test_frontend_presence_api_tracks_multi_tab_open_and_close(temp_db):
+    client = TestClient(app.app)
+    web_chat = app.memory_store.create_chat()
+    discord_chat = app.memory_store.get_or_create_external_chat("discord", "777888999")
+    app.memory_store.create_task("Solve DP problems", priority="high")
+
+    assert client.get("/api/frontend/presence").json()["active"] is False
+
+    # Tab 1 opens
+    r1 = client.post(
+        "/api/frontend/presence",
+        json={"active": True, "client_id": "tab-1", "chat_id": web_chat["id"]},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["active"] is True
+
+    # Tab 2 opens
+    r2 = client.post(
+        "/api/frontend/presence",
+        json={"active": True, "client_id": "tab-2", "chat_id": web_chat["id"]},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["active"] is True
+
+    # Frontend-triggered check-in must NOT mirror to Discord
+    chk = client.post(
+        "/api/proactive/check-in",
+        json={"chat_id": web_chat["id"], "force": True, "source": "frontend"},
+        headers={"X-Orbit-Client-Id": "tab-1"},
+    )
+    assert chk.status_code == 200
+    assert chk.json()["discord_delivered"] == 0
+    assert app.memory_store.list_notifications(discord_chat["id"], after_id=0) == []
+
+    # Tab 1 closes -> Tab 2 still keeps frontend active
+    r3 = client.post("/api/frontend/presence", json={"active": False, "client_id": "tab-1"})
+    assert r3.json()["active"] is True
+
+    # Tab 2 closes -> frontend is immediately inactive
+    r4 = client.post("/api/frontend/presence", json={"active": False, "client_id": "tab-2"})
+    assert r4.json()["active"] is False
+    assert app.is_proactive_notification_key("task-coach-learning-abc") is True
+    assert app.is_proactive_notification_key("code-sugg-12-loop.cpp") is True
+    assert app.is_proactive_notification_key("user-reminder-uuid-1234") is False
+
+

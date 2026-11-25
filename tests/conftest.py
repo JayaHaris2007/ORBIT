@@ -38,4 +38,7 @@ def isolate_app_environment(temp_db, monkeypatch):
     # Mock ensure_model_loaded so tests never attempt to load Qwen3 into VRAM or CPU
     monkeypatch.setattr(app, "ensure_model_loaded", MagicMock())
 
-    return temp_db
+    # Reset frontend open/closed presence between tests so presence state never leaks
+    app.mark_frontend_inactive()
+    yield temp_db
+    app.mark_frontend_inactive()

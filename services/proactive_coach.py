@@ -7,6 +7,7 @@ import os
 import random
 import re
 import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -15,18 +16,103 @@ from apscheduler.triggers.interval import IntervalTrigger
 from voice.text_clean import summarize_for_speech
 
 _DELIVERY_LOCK = threading.Lock()
+_PRESENCE_LOCK = threading.Lock()
+_FRONTEND_CLIENTS: dict[str, float] = {}
+_ACTIVE_FRONTEND_CHAT_ID: str | None = None
 
 PROACTIVE_COACH_JOB_ID = "spidey-proactive-coach"
 DEFAULT_COACH_INTERVAL_MINUTES = int(os.environ.get("ORBIT_COACH_INTERVAL_MINUTES", "45").strip() or "45")
 QUIET_HOURS_START = int(os.environ.get("ORBIT_QUIET_HOURS_START", "23").strip() or "23")  # 11:00 PM
 QUIET_HOURS_END = int(os.environ.get("ORBIT_QUIET_HOURS_END", "7").strip() or "7")        # 7:00 AM
 EVENING_WRAPUP_HOUR = int(os.environ.get("ORBIT_EVENING_WRAPUP_HOUR", "20").strip() or "20")  # 8:00 PM
+try:
+    FRONTEND_ACTIVE_TTL_SECONDS = max(
+        5.0, float(os.environ.get("ORBIT_FRONTEND_ACTIVE_TTL_SECONDS", "90").strip() or "90")
+    )
+except ValueError:
+    FRONTEND_ACTIVE_TTL_SECONDS = 90.0
+
+PROACTIVE_NOTIFICATION_PREFIXES = (
+    "task-coach-",
+    "code-sugg-",
+    "weekly-learning-nudge",
+    "learning-weekly-nudge",
+)
 
 
 def _app():
     import app
 
     return app
+
+
+def mark_frontend_active(client_id: str = "default", chat_id: str | None = None) -> None:
+    """Record that a browser tab running the web frontend is currently open."""
+    global _ACTIVE_FRONTEND_CHAT_ID
+    key = (client_id or "default").strip() or "default"
+    with _PRESENCE_LOCK:
+        _FRONTEND_CLIENTS[key] = time.monotonic()
+        if chat_id:
+            _ACTIVE_FRONTEND_CHAT_ID = str(chat_id)
+
+
+def mark_frontend_inactive(client_id: str | None = None) -> None:
+    """Mark one frontend tab (or all tabs when client_id is None) as closed."""
+    global _ACTIVE_FRONTEND_CHAT_ID
+    with _PRESENCE_LOCK:
+        if client_id is None:
+            _FRONTEND_CLIENTS.clear()
+            _ACTIVE_FRONTEND_CHAT_ID = None
+        else:
+            key = client_id.strip() or "default"
+            _FRONTEND_CLIENTS.pop(key, None)
+            if not _FRONTEND_CLIENTS:
+                _ACTIVE_FRONTEND_CHAT_ID = None
+
+
+def get_active_frontend_chat_id() -> str | None:
+    """Return the most recently polled local frontend chat ID, if any tab is active."""
+    if not is_frontend_active():
+        return None
+    with _PRESENCE_LOCK:
+        return _ACTIVE_FRONTEND_CHAT_ID
+
+
+def is_frontend_active(ttl_seconds: float | None = None) -> bool:
+    """Return True if at least one web frontend tab has checked in within the TTL window."""
+    ttl = FRONTEND_ACTIVE_TTL_SECONDS if ttl_seconds is None else max(0.0, float(ttl_seconds))
+    now = time.monotonic()
+    with _PRESENCE_LOCK:
+        expired = [cid for cid, ts in _FRONTEND_CLIENTS.items() if (now - ts) > ttl]
+        for cid in expired:
+            _FRONTEND_CLIENTS.pop(cid, None)
+        if _FRONTEND_CLIENTS:
+            return True
+
+    try:
+        a = _app()
+        ws_mgr = getattr(a, "ws_manager", None)
+        if ws_mgr is not None and bool(getattr(ws_mgr, "active", None)):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def is_proactive_notification_key(reminder_id: str | None) -> bool:
+    """Return True when a notification belongs to proactive coaching/learning nudges (not user reminders)."""
+    if not reminder_id:
+        return False
+    key = str(reminder_id)
+    if key.startswith(PROACTIVE_NOTIFICATION_PREFIXES):
+        return True
+    try:
+        nudge_key = getattr(_app().learning_nudges, "NUDGE_NOTIFICATION_KEY", "")
+        if nudge_key and key.startswith(str(nudge_key)):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def is_quiet_hours(now: datetime | None = None) -> bool:
@@ -647,10 +733,18 @@ def deliver_proactive_checkin(
     now: datetime | None = None,
     mirror_to_discord: bool = True,
 ) -> dict[str, Any]:
-    """Deliver a proactive check-in notification (Web UI, WebSocket alert, and Discord)."""
+    """Deliver a proactive check-in notification.
+
+    Routing rule:
+    - When the web frontend is open, proactive check-ins go ONLY to the frontend (never Discord).
+    - When the web frontend is closed, automatic proactive check-ins go ONLY to Discord (never piling up in the closed web UI).
+    """
     a = _app()
     target_chat = chat_id or a.DEFAULT_CHAT_ID
     a._ensure_chat_exists(target_chat)
+    frontend_open = is_frontend_active()
+    ext_session = a.memory_store.get_external_session(target_chat)
+    target_is_discord = bool(ext_session and ext_session.get("provider") == "discord")
 
     with _DELIVERY_LOCK:
         # Silence automatic background check-ins during late-night quiet hours (11 PM - 7 AM)
@@ -659,6 +753,16 @@ def deliver_proactive_checkin(
                 "nudge": False,
                 "reason": "quiet_hours",
                 "chat_id": target_chat,
+                "discord_delivered": 0,
+            }
+
+        # Never send proactive check-ins to Discord while the web frontend is open
+        if target_is_discord and frontend_open and not force:
+            return {
+                "nudge": False,
+                "reason": "frontend_active",
+                "chat_id": target_chat,
+                "discord_delivered": 0,
             }
 
         if not force and a.memory_store.has_recent_coach_notification(target_chat, minutes=cooldown_minutes):
@@ -666,6 +770,52 @@ def deliver_proactive_checkin(
                 "nudge": False,
                 "reason": "already_nudged_recently",
                 "chat_id": target_chat,
+                "discord_delivered": 0,
+            }
+
+        # When the frontend is NOT open, automatic check-ins on a local chat route ONLY to Discord
+        if not target_is_discord and not frontend_open and not force:
+            discord_chats = a.memory_store.list_external_chats("discord")
+            if not discord_chats:
+                return {
+                    "nudge": False,
+                    "reason": "frontend_inactive_no_discord",
+                    "chat_id": target_chat,
+                    "discord_delivered": 0,
+                }
+            eligible_discord = [
+                d["id"]
+                for d in discord_chats
+                if not a.memory_store.has_recent_coach_notification(d["id"], minutes=cooldown_minutes)
+            ]
+            if not eligible_discord:
+                return {
+                    "nudge": False,
+                    "reason": "already_nudged_recently",
+                    "chat_id": target_chat,
+                    "discord_delivered": 0,
+                }
+            checkin = build_proactive_checkin(eligible_discord[0], preferred_category=preferred_category, now=now)
+            if checkin is None:
+                return {
+                    "nudge": False,
+                    "reason": "nothing_pending",
+                    "chat_id": eligible_discord[0],
+                    "discord_delivered": 0,
+                }
+            discord_delivered = 0
+            last_key = ""
+            for d_cid in eligible_discord:
+                last_key = f"task-coach-{checkin['category']}-discord-{uuid.uuid4()}"
+                a.memory_store.add_notification(d_cid, last_key, checkin["message"])
+                discord_delivered += 1
+            return {
+                "nudge": True,
+                "chat_id": eligible_discord[0],
+                "notification_key": last_key,
+                "discord_delivered": discord_delivered,
+                "channel": "discord",
+                **checkin,
             }
 
         checkin = build_proactive_checkin(target_chat, preferred_category=preferred_category, now=now)
@@ -674,14 +824,16 @@ def deliver_proactive_checkin(
                 "nudge": False,
                 "reason": "nothing_pending",
                 "chat_id": target_chat,
+                "discord_delivered": 0,
             }
 
         notif_key = f"task-coach-{checkin['category']}-{uuid.uuid4()}"
         a.memory_store.add_notification(target_chat, notif_key, checkin["message"])
 
-        # Mirror the check-in to tracked Discord chats so Discord users receive it too
-        discord_delivered = 0
-        if mirror_to_discord:
+        # Only mirror to Discord when the frontend is NOT open and target isn't already Discord
+        discord_delivered = 1 if target_is_discord else 0
+        effective_mirror = mirror_to_discord and (not frontend_open) and (not target_is_discord)
+        if effective_mirror:
             try:
                 discord_chats = a.memory_store.list_external_chats("discord")
                 for d_chat in discord_chats:
@@ -697,41 +849,84 @@ def deliver_proactive_checkin(
             except Exception as exc:
                 logging.getLogger("orbit007").debug("Discord proactive mirror skipped: %s", exc)
 
-    try:
-        a._push_reminder_alert(
-            {"id": notif_key, "chat_id": target_chat, "text": checkin["message"]},
-            checkin["message"],
-        )
-    except Exception as exc:
-        logging.getLogger("orbit007").debug("Proactive WS alert skipped: %s", exc)
+    if not target_is_discord:
+        try:
+            a._push_reminder_alert(
+                {"id": notif_key, "chat_id": target_chat, "text": checkin["message"]},
+                checkin["message"],
+            )
+        except Exception as exc:
+            logging.getLogger("orbit007").debug("Proactive WS alert skipped: %s", exc)
 
     return {
         "nudge": True,
         "chat_id": target_chat,
         "notification_key": notif_key,
         "discord_delivered": discord_delivered,
+        "channel": "discord" if target_is_discord else "frontend",
         **checkin,
     }
 
 
-def run_scheduled_proactive_checkins(provider: str = "local") -> int:
-    """Periodic background job that checks in on active chats with pending items."""
+def run_scheduled_proactive_checkins(provider: str = "local", now: datetime | None = None) -> int:
+    """Periodic background job that routes check-ins exclusively to frontend (when open) or Discord (when closed)."""
     a = _app()
     try:
+        frontend_open = is_frontend_active()
+        cooldown = max(15, DEFAULT_COACH_INTERVAL_MINUTES - 5)
+
         if provider == "discord":
+            if frontend_open:
+                return 0
             chat_ids = [c["id"] for c in a.memory_store.list_external_chats("discord")]
+            sent = 0
+            for cid in chat_ids[:3]:
+                res = deliver_proactive_checkin(
+                    cid,
+                    force=False,
+                    cooldown_minutes=cooldown,
+                    now=now,
+                    mirror_to_discord=False,
+                )
+                if res.get("nudge"):
+                    sent += 1
+            return sent
+
+        # provider == "local"
+        if not frontend_open:
+            # Frontend is closed -> deliver ONLY to Discord (never pile up in closed web UI)
+            discord_ids = [c["id"] for c in a.memory_store.list_external_chats("discord")]
+            sent = 0
+            for cid in discord_ids[:3]:
+                res = deliver_proactive_checkin(
+                    cid,
+                    force=False,
+                    cooldown_minutes=cooldown,
+                    now=now,
+                    mirror_to_discord=False,
+                )
+                if res.get("nudge"):
+                    sent += 1
+            return sent
+
+        active_cid = get_active_frontend_chat_id()
+        if active_cid and a.memory_store.chat_exists(active_cid) and not a.memory_store.get_external_session(active_cid):
+            chat_ids = [active_cid]
         else:
             chat_ids = a.memory_store.list_local_chat_ids()
             if not chat_ids:
                 a._ensure_chat_exists(a.DEFAULT_CHAT_ID)
                 chat_ids = [a.DEFAULT_CHAT_ID]
+            chat_ids = chat_ids[:1]
 
         sent = 0
-        for cid in chat_ids[:3]:  # Cap to most recent active chats
+        for cid in chat_ids:
             res = deliver_proactive_checkin(
                 cid,
                 force=False,
-                cooldown_minutes=max(15, DEFAULT_COACH_INTERVAL_MINUTES - 5),
+                cooldown_minutes=cooldown,
+                now=now,
+                mirror_to_discord=False,
             )
             if res.get("nudge"):
                 sent += 1
