@@ -77,7 +77,7 @@ def tool_context(temp_store):
 # --- Schema and Validation Tests ---
 
 def test_tool_count_and_descriptions():
-    assert len(TOOLS) == 29
+    assert len(TOOLS) == 30
     for t in TOOLS:
         words = t.description.split()
         assert len(words) <= 40, f"Description for {t.name} exceeds 40 words ({len(words)})"

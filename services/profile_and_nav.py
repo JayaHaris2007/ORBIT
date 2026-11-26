@@ -410,8 +410,8 @@ def _memories_for_prompt(prompt: str) -> list[dict[str, Any]]:
 
 
 _GREETING_PATTERN = re.compile(
-    r"(?:hi|hello|hey|yo|hiya|good\s+(?:morning|afternoon|evening))"
-    r"[\s!.,]*(?:orbit|spidey|s\.p\.i\.d\.e\.y)?[\s!.,]*",
+    r"(?:hi|hello|hey|yo|hiya|good\s+(?:morning|afternoon|evening)|morning|gm)"
+    r"[\s!.,]*(?:orbit|spidey|s\.p\.i\.d\.e\.y|buddy|bro|dude|mate)?[\s!.,]*",
     re.IGNORECASE,
 )
 
@@ -420,6 +420,45 @@ _ASSISTANT_INTRO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_MORNING_PHRASE = re.compile(r"\b(?:good\s+morning|morning|gm)\b", re.IGNORECASE)
+_last_morning_brief_date: str | None = None
+
+
+def _morning_brief(normalized: str) -> str | None:
+    """On 'good morning' / 'morning' / 'gm', return an inbox + day summary."""
+    global _last_morning_brief_date
+    from datetime import datetime
+
+    if not _MORNING_PHRASE.search(normalized):
+        return None
+    today = datetime.now(_app().LOCAL_TIMEZONE).date().isoformat()
+
+    parts: list[str] = []
+    try:
+        from services import gmail_reader
+
+        if gmail_reader.is_configured():
+            parts.append(gmail_reader.email_digest_text(max_results=6))
+    except Exception:
+        _app().LOGGER.debug("Morning email digest skipped", exc_info=True)
+
+    try:
+        open_tasks = _app().memory_store.list_tasks(include_completed=False)
+        habits = _app().memory_store.list_habits()
+        pending_habits = [h for h in habits if today not in (h.get("completed_dates") or [])]
+        if open_tasks or pending_habits:
+            parts.append(
+                f"🗓️ Today: **{len(open_tasks)}** open task{'s' if len(open_tasks) != 1 else ''}"
+                f" and **{len(pending_habits)}** habit{'s' if len(pending_habits) != 1 else ''} to check off."
+            )
+    except Exception:
+        _app().LOGGER.debug("Morning task summary skipped", exc_info=True)
+
+    if not parts:
+        return None
+    _last_morning_brief_date = today
+    return "\n\n".join(parts)
+
 
 def _greeting_answer(prompt: str) -> str | None:
     """Answer bare greetings instantly so a model load never delays hello."""
@@ -427,10 +466,15 @@ def _greeting_answer(prompt: str) -> str | None:
     if not _GREETING_PATTERN.fullmatch(normalized):
         return None
     name = _user_name(_user_fact_memories())
-    salutation = f"Hey {name.split()[0]}!" if name else "Hey!"
+    first = name.split()[0] if name else ""
+    brief = _morning_brief(normalized)
+    if brief:
+        hello = f"Good morning{', ' + first if first else ''}! ☀️"
+        return f"{hello}\n\n{brief}"
+    salutation = f"Hey {first}!" if first else "Hey!"
     return (
         f"{salutation} I'm ORBIT. Ask me about your tasks, habits, "
-        "reminders, learning progress, or anything you've saved."
+        "reminders, learning progress, emails, or anything you've saved."
     )
 
 

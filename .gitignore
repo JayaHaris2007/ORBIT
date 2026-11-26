@@ -79,3 +79,10 @@ backups/
 # Local backups and scratch
 backups/
 scratch/__pycache__/
+
+# Google OAuth credentials and tokens (never commit)
+secrets/
+client_secret*.json
+*token*.json
+credentials.json
+

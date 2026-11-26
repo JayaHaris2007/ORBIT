@@ -38,6 +38,14 @@ def isolate_app_environment(temp_db, monkeypatch):
     # Mock ensure_model_loaded so tests never attempt to load Qwen3 into VRAM or CPU
     monkeypatch.setattr(app, "ensure_model_loaded", MagicMock())
 
+    # Never touch the real Gmail account/token during tests
+    from services import gmail_reader
+    monkeypatch.setattr(gmail_reader, "CLIENT_SECRET_PATH", temp_db.database_path.parent / "no_client_secret.json")
+    monkeypatch.setattr(gmail_reader, "TOKEN_PATH", temp_db.database_path.parent / "no_gmail_token.json")
+    gmail_reader.clear_cache()
+    from services import profile_and_nav
+    monkeypatch.setattr(profile_and_nav, "_last_morning_brief_date", None)
+
     # Reset frontend open/closed presence between tests so presence state never leaks
     app.mark_frontend_inactive()
     yield temp_db

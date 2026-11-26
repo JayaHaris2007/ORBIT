@@ -460,8 +460,40 @@ def _daily_briefing_command(prompt: str) -> tuple[str, str] | None:
         except Exception:
             _app().LOGGER.debug("Suppressed error (app.py site 4)", exc_info=True)
 
+    try:
+        from services import gmail_reader
+
+        if gmail_reader.is_connected():
+            sections.append("")
+            sections.append(gmail_reader.email_digest_text(max_results=5))
+    except Exception:
+        _app().LOGGER.debug("Briefing email digest skipped", exc_info=True)
 
     return ("\n".join(sections), "local-briefing")
+
+
+_EMAIL_NOUN = re.compile(r"\b(?:e-?mails?|mails?|inbox|gmail)\b", re.IGNORECASE)
+_EMAIL_INTENT = re.compile(
+    r"\b(?:check|read|show|any|new|unread|latest|recent|what|got|get|summari[sz]e|see|open|important|my)\b",
+    re.IGNORECASE,
+)
+_EMAIL_EXCLUDE = re.compile(
+    r"\b(?:send|write|draft|reply|compose|forward|delete|remind|task|habit|add|create|schedule)\b",
+    re.IGNORECASE,
+)
+
+
+def _email_command(prompt: str) -> tuple[str, str] | None:
+    """Answer 'check my email' / 'any new mails?' with a spam-filtered Gmail digest."""
+    normalized = _app()._normalize_command(prompt)
+    if len(normalized) > 80 or not _EMAIL_NOUN.search(normalized):
+        return None
+    if _EMAIL_EXCLUDE.search(normalized) or not _EMAIL_INTENT.search(normalized):
+        return None
+    from services import gmail_reader
+
+    include_read = bool(re.search(r"\b(?:all|today'?s?|read)\b", normalized, re.IGNORECASE))
+    return (gmail_reader.email_digest_text(max_results=8, include_read=include_read), "local-email")
 
 
 def _resolve_generic_delete(
@@ -569,6 +601,10 @@ def _handle_local_command(prompt: str, chat_id: str) -> tuple[str, str] | None:
     briefing = _daily_briefing_command(prompt)
     if briefing is not None:
         return briefing
+
+    email_reply = _email_command(prompt)
+    if email_reply is not None:
+        return email_reply
 
     proactive = _app()._proactive_coach_command(prompt, chat_id)
     if proactive is not None:

@@ -1307,6 +1307,37 @@ def _exec_control_ui(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 # --- Tool Registry Definition ---
 
+def _exec_check_email(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    """Read-only, spam-filtered Gmail inbox digest."""
+    from services import gmail_reader
+
+    if not gmail_reader.is_connected():
+        return {"status": "error", "message": gmail_reader.email_digest_text()}
+    try:
+        result = gmail_reader.fetch_inbox(
+            max_results=int(args.get("max_results") or 6),
+            include_read=bool(args.get("include_read", False)),
+        )
+    except Exception as exc:
+        return {"status": "error", "message": f"Could not reach Gmail: {exc}"}
+    emails = [
+        {
+            "from": e.get("from_name"),
+            "subject": e.get("subject"),
+            "snippet": (e.get("snippet") or "")[:160],
+            "received": e.get("received"),
+            "important": "IMPORTANT" in (e.get("labels") or []),
+        }
+        for e in result.get("emails") or []
+    ]
+    return {
+        "status": "ok",
+        "emails": emails,
+        "filtered_spam_count": result.get("filtered_count", 0),
+        "summary": gmail_reader.format_email_summary(result),
+    }
+
+
 TOOLS: list[ToolDefinition] = [
     # Reminders
     ToolDefinition(
@@ -1702,6 +1733,20 @@ TOOLS: list[ToolDefinition] = [
         },
         destructive=False,
         executor=_exec_control_ui,
+    ),
+    # Email (read-only)
+    ToolDefinition(
+        name="check_email",
+        description="Read the user's recent unread Gmail inbox (read-only), with spam and promotions filtered out.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "max_results": {"type": "integer", "description": "How many emails to return (1-20)."},
+                "include_read": {"type": "boolean", "description": "Also include already-read emails from today."},
+            },
+        },
+        destructive=False,
+        executor=_exec_check_email,
     ),
 ]
 
