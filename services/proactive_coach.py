@@ -563,7 +563,13 @@ def build_proactive_checkin(
             folder_insights[0] if folder_insights else None,
         )
         empty_files = (rm_insight or {}).get("empty_files") or []
-        pending_code_sugg = (rm_insight or {}).get("pending_suggestions") or []
+        raw_pending_sugg = (rm_insight or {}).get("pending_suggestions") or []
+        recent_blob = " ".join(recent_msgs).lower()
+        # Do not nag repeatedly about the exact same code-completion suggestion already asked recently
+        pending_code_sugg = [
+            s for s in raw_pending_sugg
+            if str(s.get("topic_name") or "").lower() not in recent_blob
+        ]
         recent_files = (rm_insight or {}).get("recent_files") or []
 
         if pending_code_sugg:

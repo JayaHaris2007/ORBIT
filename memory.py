@@ -46,7 +46,7 @@ class MemoryStore:
         self._embedder = None
         self._embedding_warning_printed = False
         self._local = threading.local()
-        self._open_connections: list[sqlite3.Connection] = []
+        self._open_connections: list[tuple[int, sqlite3.Connection]] = []
         self._conn_lock = threading.Lock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
@@ -81,16 +81,24 @@ class MemoryStore:
         self._local.conn = connection
         self._local.db_key = db_key
         with self._conn_lock:
-            self._open_connections.append(connection)
+            self._open_connections.append((threading.get_ident(), connection))
         return connection
 
     def close(self) -> None:
-        """Close all cached thread-local SQLite connections."""
+        """Safely close cached SQLite connections owned by the current thread or exited threads."""
+        cur_tid = threading.get_ident()
+        alive_tids = {t.ident for t in threading.enumerate() if t.ident is not None}
+        to_close: list[sqlite3.Connection] = []
+        still_active: list[tuple[int, sqlite3.Connection]] = []
         with self._conn_lock:
-            conns = list(self._open_connections)
-            self._open_connections.clear()
+            for tid, conn in self._open_connections:
+                if tid == cur_tid or tid not in alive_tids:
+                    to_close.append(conn)
+                else:
+                    still_active.append((tid, conn))
+            self._open_connections[:] = still_active
         self._local.__dict__.clear()
-        for conn in conns:
+        for conn in to_close:
             try:
                 conn.close()
             except Exception:
@@ -970,7 +978,7 @@ class MemoryStore:
                     item["score"] = float(score)
                     ranked_by_id[item["id"]] = (float(score), item)
 
-        # Hybrid lexical + semantic-concept fallback across ALL memories (including NULL or mismatched embeddings)
+        # Hybrid lexical + stemmed + typo-tolerant + semantic-concept fallback across ALL memories
         stop_words = {
             "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
             "is", "are", "was", "were", "be", "been", "being", "do", "does", "did",
@@ -982,15 +990,36 @@ class MemoryStore:
             {"food", "dish", "dishes", "meal", "meals", "eat", "eating", "cuisine", "snack", "breakfast", "lunch", "dinner", "biryani", "chicken", "spicy", "restaurant"},
             {"like", "likes", "love", "loves", "favorite", "favourite", "prefer", "prefers", "enjoy", "enjoys", "fond"},
             {"laptop", "pc", "computer", "hardware", "specs", "gpu", "cpu", "ram", "asus", "tuf", "ryzen", "rtx", "machine"},
-            {"skill", "skills", "tech", "stack", "programming", "language", "languages", "framework", "frameworks", "code", "coding", "developer", "react", "python", "javascript"},
+            {"skill", "skills", "tech", "stack", "programming", "language", "languages", "framework", "frameworks", "code", "coding", "developer", "react", "python", "javascript", "cpp", "dsa", "java"},
             {"startup", "business", "company", "venture", "lighthouse", "client", "clients"},
-            {"project", "projects", "app", "apps", "application", "applications", "built", "building", "developing", "kage"},
-            {"study", "studies", "education", "college", "diploma", "degree", "student", "course", "branch"},
+            {"project", "projects", "app", "apps", "application", "applications", "built", "building", "developing", "kage", "orbit"},
+            {"study", "studies", "education", "college", "diploma", "degree", "student", "course", "branch", "learn", "exam", "interview"},
             {"goal", "goals", "aim", "ambition", "future", "career", "plan"},
             {"name", "called", "identity", "who"},
+            {"email", "mail", "gmail", "inbox"},
+            {"routine", "morning", "habit", "schedule", "workout", "gym", "sleep"},
         ]
 
-        raw_terms = set(re.findall(r"[a-z0-9]+", query.lower()))
+        def _norm_mem_tokens(text: str) -> set[str]:
+            norm = re.sub(r"(?<![a-z0-9])c\s*\+\s*\+(?![a-z0-9])", " cpp ", text.lower())
+            norm = re.sub(r"\bc\s+plus\s+plus\b", " cpp ", norm)
+            norm = re.sub(r"(?<![a-z0-9])c\s*#(?![a-z0-9])", " csharp ", norm)
+            toks = set(re.findall(r"[a-z0-9]+", norm))
+            stems = set(toks)
+            for t in toks:
+                if t in ("learnt", "learned", "learning"):
+                    stems.add("learn")
+                elif t in ("studied", "studies", "studying"):
+                    stems.add("study")
+                elif t in ("coded", "coding"):
+                    stems.add("code")
+                elif len(t) >= 5 and t.endswith("ies"):
+                    stems.add(t[:-3] + "y")
+                elif len(t) >= 5 and t.endswith("s") and not t.endswith(("ss", "us", "is")):
+                    stems.add(t[:-1])
+            return stems
+
+        raw_terms = _norm_mem_tokens(query)
         meaningful_terms = raw_terms - stop_words
         if not meaningful_terms:
             meaningful_terms = raw_terms
@@ -1001,14 +1030,33 @@ class MemoryStore:
             if meaningful_terms & group:
                 expanded_terms |= group
 
+        try:
+            from rapidfuzz.distance import DamerauLevenshtein
+            _mem_sim = lambda a, b: DamerauLevenshtein.normalized_similarity(a, b) * 100.0
+        except Exception:
+            try:
+                from rapidfuzz import fuzz as _rf_fuzz
+                _mem_sim = _rf_fuzz.ratio
+            except Exception:
+                _mem_sim = None
+
         for memory in self.list_memories():
             mem_id = memory["id"]
-            mem_terms = set(re.findall(r"[a-z0-9]+", memory["content"].lower()))
+            mem_terms = _norm_mem_tokens(memory["content"])
             exact_hits = len(meaningful_terms & mem_terms)
             concept_hits = len(expanded_terms & mem_terms)
-            if exact_hits == 0 and concept_hits == 0:
+            fuzzy_bonus = 0.0
+            if exact_hits == 0 and _mem_sim is not None:
+                long_q = [t for t in meaningful_terms if len(t) >= 4]
+                long_m = [t for t in mem_terms if len(t) >= 4]
+                if long_q and long_m:
+                    for qt in long_q[:6]:
+                        best = max((_mem_sim(qt, mt) for mt in long_m), default=0.0)
+                        if best >= 80.0:
+                            fuzzy_bonus += 0.22 * (best / 100.0)
+            if exact_hits == 0 and concept_hits == 0 and fuzzy_bonus == 0.0:
                 continue
-            lex_score = exact_hits * 0.25 + concept_hits * 0.12
+            lex_score = exact_hits * 0.25 + concept_hits * 0.12 + min(0.45, fuzzy_bonus)
             existing = ranked_by_id.get(mem_id)
             if existing is None or lex_score > existing[0]:
                 mem_copy = dict(memory)

@@ -350,16 +350,31 @@ def resolve_short_follow_up(
     return prompt
 
 
-def _productivity_context(prompt: str) -> str:
-    """Current habits/tasks/learning, injected when the question is about them or the dashboard."""
-    if not re.search(
-        r"\b(?:habits?|tasks?|to[\s-]?dos?|routine|schedule|productiv\w*|"
-        r"improve\w*|discipline|goals?|learning|studying|study|topics?|course\w*|"
-        r"skills?|practice|main\s+page|dashboard|page|app|nothing|there|pending|"
-        r"completed|done|list|folder|code|coding|file|files|cpp|c\+\+|dsa|roadmap)\b",
-        prompt,
-        re.IGNORECASE,
-    ):
+_PRODUCTIVITY_CUE_RE = re.compile(
+    r"(?<![a-z0-9])c\s*\+\s*\+(?![a-z0-9])"
+    r"|(?<![a-z0-9])c\s*#(?![a-z0-9])"
+    r"|\bc\s+plus\s+plus\b"
+    r"|\b(?:habits?|tasks?|to[\s-]?dos?|routine|schedule|productiv\w*|"
+    r"improve\w*|discipline|goals?|learn(?:ed|t|ing)?|stud(?:y|ied|ying)|topics?|course\w*|"
+    r"skills?|practice\w*|problem\w*|interview\w*|exercise\w*|quiz|algorithm\w*|"
+    r"main\s+page|dashboard|page|app|nothing|there|pending|"
+    r"completed|done|list|folder|code|coding|coded|file|files|cpp|dsa|roadmap\w*|"
+    r"python|java|javascript|typescript|rust|sql|react)\b",
+    re.IGNORECASE,
+)
+
+
+def _productivity_context(prompt: str, history: list[dict[str, Any]] | None = None) -> str:
+    """Current habits/tasks/learning, injected when the question (or recent turn) is about them."""
+    if prompt.startswith("Pick the single learning topic"):
+        return ""
+    recent_tail = " ".join(
+        str(m.get("content") or "")[:300]
+        for m in (history or [])[-4:]
+        if m.get("role") in ("user", "assistant")
+    )
+    combined = f"{prompt} {recent_tail}".strip()
+    if not _PRODUCTIVITY_CUE_RE.search(combined):
         return ""
     today = datetime.now(_app().LOCAL_TIMEZONE).date().isoformat()
     lines = []
@@ -383,7 +398,7 @@ def _productivity_context(prompt: str) -> str:
             from learning import code_rag
 
             rag_ctx = code_rag.build_rag_prompt_context(
-                prompt, embed=_app().memory_store.embed, limit=3
+                prompt, embed=_app().memory_store.embed, limit=3, history=history
             )
             if rag_ctx:
                 lines.append(rag_ctx)
@@ -393,7 +408,7 @@ def _productivity_context(prompt: str) -> str:
 
 
 def _learning_digest() -> list[str]:
-    """Short learning snapshot for the LLM, or nothing when not initialized."""
+    """Short learning snapshot for the LLM (including exact completed/in-progress topics)."""
     if not _app().learning_schema.is_initialized():
         return []
     try:
@@ -408,6 +423,27 @@ def _learning_digest() -> list[str]:
         f"topics completed ({overview['completion_percent']}%), "
         f"{overview['in_progress_topics']} in progress."
     ]
+    try:
+        active_rms = [
+            rm
+            for rm in _app().learning_progress.roadmap_summaries()
+            if int(rm.get("completed_count") or 0) > 0 or int(rm.get("in_progress_count") or 0) > 0
+        ]
+        if active_rms:
+            with _app().learning_schema.connect() as conn:
+                for rm in active_rms[:4]:
+                    rows = conn.execute(
+                        "SELECT name, status FROM topics WHERE roadmap_id = ? ORDER BY position, id",
+                        (int(rm["id"]),),
+                    ).fetchall()
+                    completed = [r["name"] for r in rows if r["status"] == "completed"]
+                    in_prog = [r["name"] for r in rows if r["status"] in ("learning", "in_progress")]
+                    if completed:
+                        digest.append(f"Completed in {rm['name']}: {', '.join(completed)}.")
+                    if in_prog:
+                        digest.append(f"In progress in {rm['name']}: {', '.join(in_prog)}.")
+    except Exception:
+        pass
     upcoming = _app().learning_progress.next_topics(limit=3)
     if upcoming:
         digest.append(
@@ -575,7 +611,7 @@ def generate_response(
             "last sentence. Answer in plain conversational sentences: no "
             "headings, no emoji, no bullet lists unless the user asks for a list."
         )
-        extra = _app()._productivity_context(prompt)
+        extra = _app()._productivity_context(prompt, history=context[:-1])
         if extra:
             system_prompt += (
                 "\nThe user's live habit and task data (use it to answer; "

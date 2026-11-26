@@ -70,6 +70,8 @@ MAX_FILE_BYTES = 256 * 1024
 CHUNK_LINES = 45
 CHUNK_OVERLAP = 8
 SUGGEST_CONFIDENCE_THRESHOLD = 0.60
+# Bump whenever concept regex rules change so linked folders auto-reanalyze once and purge stale evidence.
+ANALYZER_VERSION = 2
 
 
 def _now() -> str:
@@ -169,7 +171,7 @@ _CONCEPT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ..
     (
         "classes_objects",
         ("class", "classes", "object", "objects", "oop", "oops", "encapsulation"),
-        (r"\bclass\s+[A-Za-z_]\w*(?:\s*:\s*(?:public|private|protected))?",),
+        (r"^\s*(?:public\s+|private\s+|protected\s+|abstract\s+|final\s+|export\s+)?class\s+[A-Za-z_]\w*(?:\s*:\s*(?:public|private|protected))?",),
         ("classes & objects", "classes and objects", "object-oriented", "oop", "encapsulation"),
     ),
     (
@@ -199,7 +201,11 @@ _CONCEPT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ..
     (
         "polymorphism_virtual",
         ("polymorphism", "virtual", "vtable", "override", "abstract", "interface"),
-        (r"\bvirtual\s+", r"\boverride\b", r"=\s*0\s*;"),
+        (
+            r"\bvirtual\s+",
+            r"\boverride\b",
+            r"\bvirtual\s+[^\n;{]+\([^)]*\)\s*(?:const\s*)?=\s*0\s*;",
+        ),
         ("polymorphism", "virtual functions", "abstract classes"),
     ),
     (
@@ -241,7 +247,7 @@ _CONCEPT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ..
     (
         "lambdas",
         ("lambda", "lambdas", "closure"),
-        (r"\[[^\]]*\]\s*\([^)]*\)\s*(?:->\s*[\w:<>]+\s*)?\{",),
+        (r"(?<![A-Za-z0-9_])\[[^\n\]]*\]\s*\([^;\n)]*\)\s*(?:->\s*[\w:<>]+\s*)?\{",),
         ("lambdas", "lambda", "closures"),
     ),
     (
@@ -397,23 +403,107 @@ _CONCEPT_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ..
 )
 
 _RAG_CONCEPT_EXPANSIONS: tuple[set[str], ...] = (
-    {"loop", "loops", "while", "for", "do", "iteration", "control", "if", "else", "ternary", "switch"},
-    {"cast", "casting", "typecast", "type_casting", "conversion", "operator", "operators", "arithmetic", "modulo"},
-    {"input", "output", "cin", "cout", "io", "scanf", "printf", "sum", "getting_input"},
-    {"variable", "variables", "datatype", "data_type", "int", "float", "double", "char", "bool", "sizeof"},
+    {"loop", "loops", "while", "for", "do", "for_loop", "while_loop", "do_while", "iteration", "control", "if", "else", "if_else", "ternary", "switch", "conditional", "branch", "pattern"},
+    {"cast", "casting", "typecast", "type_casting", "conversion", "operator", "operators", "arithmetic", "modulo", "bitwise"},
+    {"input", "output", "cin", "cout", "io", "scanf", "printf", "sum", "getting_input", "getline"},
+    {"variable", "variables", "datatype", "data_type", "int", "float", "double", "char", "bool", "sizeof", "primitive"},
     {"pointer", "pointers", "ptr", "address", "dereference", "reference", "references", "nullptr"},
-    {"function", "functions", "func", "method", "return", "parameters", "arguments", "recursion"},
-    {"array", "arrays", "vector", "subarray", "matrix", "string", "strings"},
-    {"class", "classes", "object", "objects", "oop", "struct", "constructor", "inheritance", "polymorphism"},
-    {"linked", "list", "node", "stack", "queue", "tree", "bst", "graph", "bfs", "dfs", "dp"},
+    {"function", "functions", "func", "method", "return", "parameters", "arguments", "recursion", "factorial", "prime", "fibonacci"},
+    {"array", "arrays", "vector", "subarray", "matrix", "string", "strings", "palindrome", "anagram"},
+    {"class", "classes", "object", "objects", "oop", "struct", "constructor", "inheritance", "polymorphism", "virtual"},
+    {"linked", "list", "node", "stack", "queue", "tree", "bst", "graph", "bfs", "dfs", "dp", "dsa"},
     {"react", "hook", "hooks", "usestate", "useeffect", "component", "jsx", "tsx", "typescript", "interface"},
     {"async", "await", "promise", "api", "rest", "endpoint", "router", "http", "sql", "query", "join"},
     {"rust", "ownership", "borrow", "trait", "impl", "match", "go", "goroutine", "decorator", "generator"},
+    {"cpp", "cplusplus", "dsa", "algorithm", "algorithms", "problem", "problems", "interview", "practice", "exercise"},
 )
+
+_TECH_ALIAS_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?<![a-z0-9])c\s*\+\s*\+(?![a-z0-9])", re.IGNORECASE), " cpp "),
+    (re.compile(r"\bc\s+plus\s+plus\b", re.IGNORECASE), " cpp "),
+    (re.compile(r"\bcplusplus\b", re.IGNORECASE), " cpp "),
+    (re.compile(r"(?<![a-z0-9])c\s*#(?![a-z0-9])", re.IGNORECASE), " csharp "),
+    (re.compile(r"\bc\s+sharp\b", re.IGNORECASE), " csharp "),
+    (re.compile(r"\bnode\.?js\b", re.IGNORECASE), " nodejs "),
+    (re.compile(r"\bnext\.?js\b", re.IGNORECASE), " nextjs "),
+    (re.compile(r"\breact\.?js\b", re.IGNORECASE), " reactjs "),
+    (re.compile(r"\boops\b", re.IGNORECASE), " oop "),
+)
+
+_IRREGULAR_STEMS: dict[str, str] = {
+    "learnt": "learn",
+    "learned": "learn",
+    "learning": "learn",
+    "studied": "study",
+    "studies": "study",
+    "studying": "study",
+    "coded": "code",
+    "coding": "code",
+    "wrote": "write",
+    "written": "write",
+    "writing": "write",
+    "practiced": "practice",
+    "practicing": "practice",
+    "practised": "practice",
+    "practising": "practice",
+    "matrices": "matrix",
+    "indices": "index",
+    "classes": "class",
+    "branches": "branch",
+    "switches": "switch",
+    "looping": "loop",
+    "loops": "loop",
+    "conditionals": "conditional",
+    "variables": "variable",
+    "operators": "operator",
+    "functions": "function",
+    "pointers": "pointer",
+    "references": "reference",
+    "arrays": "array",
+    "strings": "string",
+    "trees": "tree",
+    "graphs": "graph",
+    "stacks": "stack",
+    "queues": "queue",
+    "lists": "list",
+    "problems": "problem",
+    "questions": "question",
+    "exercises": "exercise",
+    "interviews": "interview",
+    "algorithms": "algorithm",
+    "patterns": "pattern",
+    "datatypes": "datatype",
+    "casting": "cast",
+}
+
+
+def _normalize_tech_query(text: str) -> str:
+    norm = str(text or "")
+    for pat, repl in _TECH_ALIAS_PATTERNS:
+        norm = pat.sub(repl, norm)
+    return norm
+
+
+def _stem_token(tok: str) -> str:
+    t = tok.lower().strip()
+    if not t:
+        return ""
+    if t in _IRREGULAR_STEMS:
+        return _IRREGULAR_STEMS[t]
+    if len(t) >= 6 and t.endswith("ing") and not t.endswith("string"):
+        return t[:-3]
+    if len(t) >= 5 and t.endswith("ies"):
+        return t[:-3] + "y"
+    if len(t) >= 5 and t.endswith("ed") and not t.endswith("speed"):
+        return t[:-2]
+    if len(t) >= 5 and t.endswith("s") and not t.endswith(("ss", "us", "is")):
+        return t[:-1]
+    return t
 
 
 def _slug_tokens(text: str) -> list[str]:
-    cleaned = re.sub(r"([a-z])([A-Z])", r"\1_\2", text)
+    norm = _normalize_tech_query(text)
+    cleaned = re.sub(r"([a-z])([A-Z])", r"\1_\2", norm)
     return [tok for tok in re.findall(r"[a-z0-9]+", cleaned.lower()) if tok]
 
 
@@ -1066,6 +1156,7 @@ def sync_roadmap_folder(
     roadmap_id: int,
     *,
     embed: Embedder | None = None,
+    force_reanalyze: bool = False,
 ) -> dict[str, Any]:
     """Scan a roadmap's linked folder incrementally, update RAG index & topic suggestions."""
     folder_link = get_folder_link(roadmap_id)
@@ -1078,6 +1169,17 @@ def sync_roadmap_folder(
     roadmap = progress.get_roadmap(roadmap_id)
     if roadmap is None:
         raise ValueError("Roadmap not found.")
+
+    prev_summary = folder_link.get("last_sync_summary")
+    if isinstance(prev_summary, str):
+        try:
+            prev_summary = json.loads(prev_summary)
+        except Exception:
+            prev_summary = {}
+    if not isinstance(prev_summary, dict):
+        prev_summary = {}
+    if int(prev_summary.get("analyzer_version") or 1) < ANALYZER_VERSION:
+        force_reanalyze = True
 
     discovered_paths = _discover_source_files(root)
     discovered_rels = {p.relative_to(root).as_posix(): p for p in discovered_paths}
@@ -1131,21 +1233,24 @@ def sync_roadmap_folder(
 
             stat = fpath.stat()
             mod_iso = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
-            stat_unchanged = (
-                old is not None
-                and old["file_size"] == stat.st_size
-                and old["modified_at"] == mod_iso
-                and bool(old["has_compiled_artifact"]) == bool(has_compiled)
-            )
-            if not stat_unchanged and old is not None:
-                raw_bytes = fpath.read_bytes()
-                quick_hash = hashlib.sha256(raw_bytes).hexdigest()
-                unchanged = (
-                    old["content_hash"] == quick_hash
+            if force_reanalyze:
+                unchanged = False
+            else:
+                stat_unchanged = (
+                    old is not None
+                    and old["file_size"] == stat.st_size
+                    and old["modified_at"] == mod_iso
                     and bool(old["has_compiled_artifact"]) == bool(has_compiled)
                 )
-            else:
-                unchanged = stat_unchanged
+                if not stat_unchanged and old is not None:
+                    raw_bytes = fpath.read_bytes()
+                    quick_hash = hashlib.sha256(raw_bytes).hexdigest()
+                    unchanged = (
+                        old["content_hash"] == quick_hash
+                        and bool(old["has_compiled_artifact"]) == bool(has_compiled)
+                    )
+                else:
+                    unchanged = stat_unchanged
 
             if unchanged and old is not None:
                 try:
@@ -1400,6 +1505,14 @@ def sync_roadmap_folder(
                 if old_tid not in matched_topic_ids:
                     conn.execute("DELETE FROM topic_code_evidence WHERE id = ?", (old_ev["id"],))
 
+        # Reconcile any manually completed topics so stale 'pending' suggestions never linger
+        conn.execute(
+            "UPDATE topic_code_evidence SET suggestion_state = 'confirmed', updated_at = ? "
+            "WHERE roadmap_id = ? AND suggestion_state = 'pending' "
+            "AND topic_id IN (SELECT id FROM topics WHERE roadmap_id = ? AND status = 'completed')",
+            (now, roadmap_id, roadmap_id),
+        )
+
         practiced_count = sum(1 for f in analyzed_files if f["file_state"] == "practiced")
         wip_count = sum(1 for f in analyzed_files if f["file_state"] == "wip")
         empty_count = sum(1 for f in analyzed_files if f["file_state"] == "empty")
@@ -1410,6 +1523,7 @@ def sync_roadmap_folder(
         ).fetchone()["n"]
 
         summary_payload = {
+            "analyzer_version": ANALYZER_VERSION,
             "total_files": len(analyzed_files),
             "practiced_files": practiced_count,
             "wip_files": wip_count,
@@ -1541,28 +1655,68 @@ def resolve_code_suggestion(
 # Hybrid Code RAG Search (FTS5 BM25 + Lexical/Concept + Optional Embeddings)
 # ---------------------------------------------------------------------------
 
+_RAG_STOP_WORDS = {
+    "what", "which", "where", "when", "why", "how", "is", "are", "was", "were",
+    "the", "a", "an", "of", "to", "in", "on", "for", "with", "about", "from",
+    "my", "me", "i", "you", "your", "did", "do", "have", "has", "code", "file",
+    "files", "folder", "show", "check", "tell", "explain", "next", "give", "some",
+    "till", "until", "so", "far", "like", "mean", "level", "please", "can", "could",
+}
+
+
 def _sanitize_fts_query(query: str) -> str:
-    tokens = [t for t in re.findall(r"[A-Za-z0-9_]+", query.lower()) if len(t) >= 2]
-    if not tokens:
+    norm = _normalize_tech_query(query)
+    raw = [t for t in re.findall(r"[A-Za-z0-9_]+", norm.lower()) if len(t) >= 2]
+    meaningful = [t for t in raw if t not in _RAG_STOP_WORDS] or raw
+    if not meaningful:
         return ""
-    # Use OR so natural-language questions match relevant chunks cleanly
-    return " OR ".join(f'"{t}"' for t in tokens[:10])
+    terms: list[str] = []
+    seen: set[str] = set()
+    for t in meaningful:
+        for cand in (t, _stem_token(t)):
+            if len(cand) >= 2 and cand not in seen:
+                seen.add(cand)
+                # Use prefix matching on tokens len >= 3 so 'loop' matches 'loops', 'for_loop', etc.
+                terms.append(f'"{cand}"*' if len(cand) >= 3 else f'"{cand}"')
+    return " OR ".join(terms[:12])
 
 
 def _expand_query_terms(query: str) -> tuple[set[str], set[str]]:
-    stop = {
-        "what", "which", "where", "when", "why", "how", "is", "are", "was", "were",
-        "the", "a", "an", "of", "to", "in", "on", "for", "with", "about", "from",
-        "my", "me", "i", "you", "your", "did", "do", "have", "has", "code", "file",
-        "files", "folder", "cpp", "show", "check", "tell", "explain", "next",
-    }
     raw = set(_slug_tokens(query))
-    core = raw - stop or raw
-    expanded = set(core)
+    stemmed = {_stem_token(t) for t in raw if _stem_token(t)}
+    core_raw = (raw - _RAG_STOP_WORDS) or raw
+    core = core_raw | {_stem_token(t) for t in core_raw if _stem_token(t)}
+    expanded = set(core) | stemmed
     for group in _RAG_CONCEPT_EXPANSIONS:
-        if core & group:
+        group_stemmed = group | {_stem_token(g) for g in group}
+        if core & group_stemmed:
             expanded |= group
     return core, expanded
+
+
+def _fuzzy_token_overlap(query_tokens: set[str], target_tokens: set[str]) -> float:
+    """Typo-tolerant lexical match (including adjacent transpositions like 'whlie' -> 'while')."""
+    unmatched_q = [t for t in query_tokens if len(t) >= 4 and t not in target_tokens]
+    if not unmatched_q or not target_tokens:
+        return 0.0
+    try:
+        from rapidfuzz.distance import DamerauLevenshtein
+        sim_fn = lambda a, b: DamerauLevenshtein.normalized_similarity(a, b) * 100.0
+    except Exception:
+        try:
+            from rapidfuzz import fuzz as _rf_fuzz
+            sim_fn = _rf_fuzz.ratio
+        except Exception:
+            return 0.0
+    cand_pool = [t for t in target_tokens if len(t) >= 3]
+    if not cand_pool:
+        return 0.0
+    bonus = 0.0
+    for qt in unmatched_q[:6]:
+        best = max((sim_fn(qt, ct) for ct in cand_pool), default=0.0)
+        if best >= 80.0:
+            bonus += 0.24 * (best / 100.0)
+    return min(0.48, bonus)
 
 
 def _cosine_blob(query_vec: list[float], blob: bytes | None) -> float:
@@ -1592,11 +1746,12 @@ def search_code_rag(
         return []
 
     core_terms, expanded_terms = _expand_query_terms(query)
+    norm_phrase = re.sub(r"\s+", " ", _normalize_tech_query(query).lower()).strip()
     fts_query = _sanitize_fts_query(query)
     scored: dict[int, tuple[float, dict[str, Any]]] = {}
 
     with schema.connect() as conn:
-        # 1. SQLite FTS5 BM25 retrieval
+        # 1. SQLite FTS5 BM25 retrieval (with stop-word filtering & prefix matching)
         if fts_query:
             try:
                 sql = (
@@ -1624,7 +1779,7 @@ def search_code_rag(
             except sqlite3.OperationalError:
                 pass
 
-        # 2. Concept-expanded lexical + optional vector scan across chunks
+        # 2. Stemmed + concept-expanded + typo-tolerant lexical + optional vector scan
         chunk_sql = (
             "SELECT c.id, c.roadmap_id, c.rel_path, c.start_line, c.end_line, "
             "c.content, c.concepts, c.embedding, f.file_state, f.language, f.line_count, "
@@ -1647,17 +1802,26 @@ def search_code_rag(
 
         for row in conn.execute(chunk_sql, chunk_params).fetchall():
             cid = int(row["id"])
-            haystack_tokens = set(_slug_tokens(f"{row['rel_path']} {row['concepts']} {row['content'][:1200]}"))
+            path_tokens = set(_slug_tokens(row["rel_path"]))
+            path_stems = path_tokens | {_stem_token(t) for t in path_tokens}
+            raw_haystack = set(_slug_tokens(f"{row['rel_path']} {row['concepts']} {row['content'][:1200]}"))
+            haystack_tokens = raw_haystack | {_stem_token(t) for t in raw_haystack}
+
             exact_hits = len(core_terms & haystack_tokens)
+            filename_hits = len(core_terms & path_stems)
             concept_hits = len(expanded_terms & haystack_tokens)
-            lex_score = exact_hits * 0.24 + concept_hits * 0.09
+            fuzzy_bonus = _fuzzy_token_overlap(core_terms, haystack_tokens) if exact_hits == 0 else 0.0
+            stem_space = re.sub(r"[_\-]+", " ", Path(row["rel_path"]).stem.lower()).strip()
+            phrase_bonus = 0.35 if (len(stem_space) >= 3 and stem_space in norm_phrase) else 0.0
+
+            lex_score = exact_hits * 0.24 + filename_hits * 0.22 + concept_hits * 0.09 + fuzzy_bonus + phrase_bonus
             vec_score = _cosine_blob(query_vec, row["embedding"]) if query_vec else 0.0
             combined_extra = lex_score + (vec_score * 0.65 if vec_score >= 0.30 else 0.0)
 
             if cid in scored:
                 prev_score, prev_item = scored[cid]
                 scored[cid] = (round(prev_score + combined_extra, 4), prev_item)
-            elif combined_extra >= 0.18:
+            elif combined_extra >= 0.16:
                 item = dict(row)
                 item.pop("embedding", None)
                 scored[cid] = (round(combined_extra, 4), item)
@@ -1842,62 +2006,151 @@ def _compose_friendly_recap(
     return " ".join(parts)
 
 
+_CODE_OR_LEARNING_CUE_RE = re.compile(
+    r"(?<![a-z0-9])c\s*\+\s*\+(?![a-z0-9])"
+    r"|(?<![a-z0-9])c\s*#(?![a-z0-9])"
+    r"|\bc\s+plus\s+plus\b"
+    r"|\b(?:code|coding|coded|folder|file|files|cpp|dsa|algorithm\w*|data\s+structures?|"
+    r"loop\w*|while|for|if|else|ternary|switch|operator\w*|cast\w*|input|output|variable\w*|"
+    r"function\w*|array\w*|string\w*|pointer\w*|class(?:es)?|oop\w*|recursion|sorting|searching|"
+    r"learn(?:ed|t|ing)?|stud(?:y|ied|ying)|roadmap\w*|topic\w*|progress|completed|next|"
+    r"practice\w*|problem\w*|question\w*|exercise\w*|interview\w*|quiz|leetcode|"
+    r"bug|error|review|wrote|written|python|java|javascript|typescript|rust|sql|react)\b",
+    re.IGNORECASE,
+)
+
+
+def _build_roadmap_progress_grounding(prompt_and_history: str) -> list[str]:
+    """Summarize exact COMPLETED vs. IN-PROGRESS vs. NOT-YET-LEARNED topics for grounded practice/advice."""
+    try:
+        roadmaps = progress.roadmap_summaries()
+    except Exception:
+        return []
+    if not roadmaps:
+        return []
+
+    norm_text = _normalize_tech_query(prompt_and_history).lower()
+    text_tokens = set(_slug_tokens(norm_text))
+    selected: list[dict[str, Any]] = []
+    for rm in roadmaps:
+        rm_tokens = set(_slug_tokens(rm.get("name") or ""))
+        done_cnt = int(rm.get("completed_count") or rm.get("completed_topics") or 0)
+        prog_cnt = int(rm.get("in_progress_count") or rm.get("in_progress_topics") or 0)
+        if (rm_tokens & text_tokens) or done_cnt > 0 or prog_cnt > 0:
+            selected.append(rm)
+    if not selected:
+        return []
+
+    # Prefer roadmaps explicitly mentioned in the conversation first
+    selected.sort(
+        key=lambda r: (
+            len(set(_slug_tokens(r.get("name") or "")) & text_tokens),
+            int(r.get("completed_count") or 0) + int(r.get("in_progress_count") or 0),
+        ),
+        reverse=True,
+    )
+
+    lines: list[str] = ["User's exact learning roadmap progress (GROUND TRUTH):"]
+    with schema.connect() as conn:
+        for rm in selected[:3]:
+            rows = conn.execute(
+                "SELECT name, status FROM topics WHERE roadmap_id = ? ORDER BY position, id",
+                (int(rm["id"]),),
+            ).fetchall()
+            if not rows:
+                continue
+            completed = [r["name"] for r in rows if r["status"] == "completed"]
+            in_prog = [r["name"] for r in rows if r["status"] in ("learning", "in_progress")]
+            not_started = [r["name"] for r in rows if r["status"] == "not_started"]
+            lines.append(f"- Roadmap '{rm['name']}' ({len(completed)}/{len(rows)} completed):")
+            lines.append(
+                "  * COMPLETED (user HAS learned ONLY these): "
+                + (", ".join(completed) if completed else "none yet")
+            )
+            if in_prog:
+                lines.append("  * IN PROGRESS (currently practicing): " + ", ".join(in_prog))
+            if not_started:
+                preview = ", ".join(not_started[:8])
+                suffix = f" (+{len(not_started) - 8} more)" if len(not_started) > 8 else ""
+                lines.append(f"  * NOT YET LEARNED (do NOT assume user knows these): {preview}{suffix}")
+    lines.append(
+        "STRICT LEVEL RULE: If the user asks for practice problems, DSA questions, interview-level questions, "
+        "or exercises based on what they have learned so far, ONLY give problems solvable with their COMPLETED "
+        "and IN PROGRESS topics above. NEVER give problems requiring topics listed under NOT YET LEARNED "
+        "(for instance, if Arrays/Linked Lists/Trees/Graphs/DP are NOT YET LEARNED, only give logic, math, "
+        "conditionals, loops, bitwise/operator, and pattern problems using what they actually know)."
+    )
+    return lines
+
+
 def build_rag_prompt_context(
     prompt: str,
     *,
     embed: Embedder | None = None,
     limit: int = 3,
+    history: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Build compact grounded RAG context for LLM chat turns about the user's code/learning."""
+    """Build compact grounded RAG + roadmap progress context for LLM chat turns about code/learning."""
     if not schema.is_initialized():
         return ""
     links = list_folder_links()
-    if not links:
-        return ""
 
-    # Check if prompt relates to coding, learning, folders, or any linked roadmap/file
+    # Include last 2 conversation turns so follow-ups like "I mean like the interview level" stay grounded!
+    recent_tail = " ".join(
+        str(m.get("content") or "")[:300]
+        for m in (history or [])[-4:]
+        if m.get("role") in ("user", "assistant")
+    )
+    combined_text = f"{prompt} {recent_tail}".strip()
+
     roadmap_tokens = set()
     for link in links:
         roadmap_tokens.update(_slug_tokens(link.get("roadmap_name") or ""))
-    prompt_low = prompt.lower()
-    prompt_tokens = set(_slug_tokens(prompt))
-    has_code_cue = bool(
-        re.search(
-            r"\b(?:code|coding|folder|file|files|cpp|c\+\+|dsa|loop|while|if|else|ternary|"
-            r"operator|casting|input|output|variable|function|array|string|pointer|class|"
-            r"learn|learning|study|roadmap|progress|completed|next|practice|bug|error|review|wrote|written)\b",
-            prompt_low,
-            re.IGNORECASE,
-        )
-    ) or bool(prompt_tokens & roadmap_tokens)
+    combined_tokens = set(_slug_tokens(combined_text))
+    has_code_cue = bool(_CODE_OR_LEARNING_CUE_RE.search(combined_text)) or bool(combined_tokens & roadmap_tokens)
     if not has_code_cue:
         return ""
 
-    lines: list[str] = ["Linked learning code folders & progress:"]
-    for link in links[:3]:
-        try:
-            ins = get_roadmap_code_insights(int(link["roadmap_id"]))
-            line = (
-                f"- {ins['roadmap_name']} ({link['folder_path']}): "
-                f"{ins['practiced_count']} practiced files"
-            )
-            if ins["empty_files"]:
-                line += f", empty/unstarted files: {', '.join(ins['empty_files'][:3])}"
-            if ins["pending_suggestions"]:
-                s_names = ", ".join(s["topic_name"] for s in ins["pending_suggestions"][:3])
-                line += f", suggested completed (awaiting user confirm): {s_names}"
-            if ins["next_topics"]:
-                line += f", next topic: {ins['next_topics'][0]['name']}"
-            lines.append(line)
-        except Exception:
-            continue
+    lines: list[str] = _build_roadmap_progress_grounding(combined_text)
 
-    hits = search_code_rag(prompt, limit=limit, embed=embed)
-    if hits:
-        lines.append("Relevant code snippets from the user's learning folder (RAG):")
-        for hit in hits:
-            lines.append(
-                f"--- {hit['rel_path']} (L{hit['start_line']}-L{hit['end_line']}, {hit['file_state']}) ---\n"
-                f"{hit['snippet'][:420]}"
-            )
+    if links:
+        lines.append("Linked learning code folders & practice files:")
+        for link in links[:3]:
+            try:
+                ins = get_roadmap_code_insights(int(link["roadmap_id"]))
+                practiced_names: list[str] = []
+                for f in (ins.get("recent_files") or []):
+                    if isinstance(f, dict):
+                        if f.get("file_state") == "practiced" and f.get("rel_path"):
+                            practiced_names.append(Path(str(f["rel_path"])).name)
+                    elif isinstance(f, str) and f.strip():
+                        practiced_names.append(Path(f).name)
+                practiced_names = practiced_names[:8]
+                line = (
+                    f"- {ins['roadmap_name']} ({link['folder_path']}): "
+                    f"{ins['practiced_count']} practiced files"
+                )
+                if practiced_names:
+                    line += f" ({', '.join(practiced_names)})"
+                if ins["empty_files"]:
+                    line += f", empty/unstarted files: {', '.join(ins['empty_files'][:3])}"
+                if ins["pending_suggestions"]:
+                    s_names = ", ".join(s["topic_name"] for s in ins["pending_suggestions"][:3])
+                    line += f", suggested completed (awaiting user confirm): {s_names}"
+                if ins["next_topics"]:
+                    line += f", next topic: {ins['next_topics'][0]['name']}"
+                lines.append(line)
+            except Exception:
+                continue
+
+        hits = search_code_rag(prompt, limit=limit, embed=embed)
+        if not hits and recent_tail:
+            hits = search_code_rag(combined_text[:300], limit=limit, embed=embed)
+        if hits:
+            lines.append("Relevant code snippets from the user's learning folder (RAG):")
+            for hit in hits:
+                lines.append(
+                    f"--- {hit['rel_path']} (L{hit['start_line']}-L{hit['end_line']}, {hit['file_state']}) ---\n"
+                    f"{hit['snippet'][:420]}"
+                )
     return "\n".join(lines)

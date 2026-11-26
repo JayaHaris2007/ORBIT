@@ -108,17 +108,25 @@ class CodeRagQueryIn(BaseModel):
 
 _database_path: Path | None = None
 _local = threading.local()
-_open_connections: list[sqlite3.Connection] = []
+_open_connections: list[tuple[int, sqlite3.Connection]] = []
 _conn_lock = threading.Lock()
 
 
 def close_connections() -> None:
-    """Close all cached thread-local SQLite connections for the learning schema."""
+    """Safely close cached SQLite connections owned by the current thread or exited threads."""
+    cur_tid = threading.get_ident()
+    alive_tids = {t.ident for t in threading.enumerate() if t.ident is not None}
+    to_close: list[sqlite3.Connection] = []
+    still_active: list[tuple[int, sqlite3.Connection]] = []
     with _conn_lock:
-        conns = list(_open_connections)
-        _open_connections.clear()
+        for tid, conn in _open_connections:
+            if tid == cur_tid or tid not in alive_tids:
+                to_close.append(conn)
+            else:
+                still_active.append((tid, conn))
+        _open_connections[:] = still_active
     _local.__dict__.clear()
-    for conn in conns:
+    for conn in to_close:
         try:
             conn.close()
         except Exception:
@@ -326,7 +334,7 @@ def _get_thread_connection() -> sqlite3.Connection:
     _local.conn = connection
     _local.db_key = db_key
     with _conn_lock:
-        _open_connections.append(connection)
+        _open_connections.append((threading.get_ident(), connection))
     return connection
 
 

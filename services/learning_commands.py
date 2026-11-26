@@ -229,6 +229,102 @@ _LEARNING_CODE_SUGGESTION_ACTION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_STOP_ASKING_PATTERN = re.compile(
+    r"^(?:(?:no|nope|nah|ok|okay|please|just|simply)\s+)*"
+    r"(?:don'?t|do\s+not|stop|quit)\s+"
+    r"(?:(?:keep\s+)?(?:ask(?:ing)?|bug(?:ging)?|nag(?:ging)?|prompt(?:ing)?|nudg(?:e|ing)|suggest(?:ing)?|remind(?:ing)?|repeat(?:ing)?))"
+    r"(?:\s+(?:me|about\s+(?:it|that|this)))?"
+    r"(?:\s+(?:again(?:\s+and\s+again)?|so\s+much|repeatedly|anymore))?$",
+    re.IGNORECASE,
+)
+
+_CODE_SUGGESTION_PROMPT_CUE_RE = re.compile(
+    r"(?:should i tick that one off|want me to mark it completed|want me to mark .{1,60} as completed|"
+    r"ready to mark it done|ready to confirm it done|confirm code suggestion)",
+    re.IGNORECASE,
+)
+
+_SHORT_REJECT_RE = re.compile(
+    r"^(?:no|nope|nah|no\s+thanks|not\s+yet|skip(?:\s+it|\s+that)?|dismiss(?:\s+it|\s+that)?|"
+    r"leave\s+it|don'?t\s+(?:tick|mark)(?:\s+it)?(?:\s+off|\s+done)?)$",
+    re.IGNORECASE,
+)
+
+_SHORT_ACCEPT_RE = re.compile(
+    r"^(?:yes|yeah|yep|sure|tick\s+it\s+off|mark\s+it\s+(?:done|completed))$",
+    re.IGNORECASE,
+)
+
+
+def _latest_code_suggestion_prompt_text(chat_id: str) -> str:
+    """Return the latest notification/assistant text if it was a code-suggestion prompt."""
+    if not chat_id:
+        return ""
+    a = _app()
+    latest_text = ""
+    latest_ts = ""
+    try:
+        msgs = a.memory_store.list_messages(chat_id)
+        if msgs and msgs[-1].get("role") == "assistant":
+            latest_text = str(msgs[-1].get("content") or "")
+            latest_ts = str(msgs[-1].get("created_at") or "")
+    except Exception:
+        pass
+    try:
+        notifs = a.memory_store.list_notifications(chat_id, after_id=0)
+        if notifs:
+            last_n = notifs[-1]
+            n_ts = str(last_n.get("created_at") or "")
+            if not latest_ts or n_ts >= latest_ts:
+                latest_text = str(last_n.get("content") or "")
+    except Exception:
+        pass
+    return latest_text if _CODE_SUGGESTION_PROMPT_CUE_RE.search(latest_text) else ""
+
+
+def _handle_code_suggestion_followup(normalized: str, chat_id: str) -> tuple[str, str] | None:
+    """Handle natural 'don't ask me again' or direct yes/no replies to a code completion check-in."""
+    if _STOP_ASKING_PATTERN.fullmatch(normalized):
+        pending = learning_code_rag.list_code_suggestions(state="pending")
+        if pending:
+            dismissed_names: list[str] = []
+            for item in pending:
+                learning_code_rag.resolve_code_suggestion(int(item["id"]), "dismissed")
+                dismissed_names.append(f"**{item['topic_name']}**")
+            return (
+                f"Got it — I dismissed the pending suggestion(s) ({', '.join(dismissed_names)}) "
+                "and won't keep asking about them.",
+                "local-learning",
+            )
+        return ("Got it — I won't keep asking.", "local-learning")
+
+    is_reject = bool(_SHORT_REJECT_RE.fullmatch(normalized))
+    is_accept = bool(_SHORT_ACCEPT_RE.fullmatch(normalized))
+    if not (is_reject or is_accept):
+        return None
+
+    prompt_text = _latest_code_suggestion_prompt_text(chat_id)
+    if not prompt_text:
+        return None
+
+    pending = learning_code_rag.list_code_suggestions(state="pending")
+    if not pending:
+        return None
+
+    low_prompt = prompt_text.lower()
+    chosen = next((p for p in pending if p["topic_name"].lower() in low_prompt), pending[0])
+    new_state = "confirmed" if is_accept else "dismissed"
+    learning_code_rag.resolve_code_suggestion(int(chosen["id"]), new_state)
+    if new_state == "confirmed":
+        return (
+            f"Nice work — marked **{chosen['topic_name']}** as completed!",
+            "local-learning",
+        )
+    return (
+        f"Got it — dismissed the suggestion for **{chosen['topic_name']}** so I won't ask about it again.",
+        "local-learning",
+    )
+
 _LEARNING_PRONOUNS = {
     "it", "that", "this", "this one", "that one", "the one",
     "the topic", "that topic", "this topic", "the lesson", "that lesson",
@@ -764,6 +860,11 @@ def _learning_command(
             return (str(err), "local-learning")
 
     normalized = _app()._normalize_command(prompt)
+
+    # Natural dismissal / follow-up to proactive code completion check-ins
+    sugg_followup = _handle_code_suggestion_followup(normalized, chat_id)
+    if sugg_followup is not None:
+        return sugg_followup
 
     # Sync / analyze linked code folder(s)
     sync_match = _LEARNING_SYNC_FOLDER_PATTERN.fullmatch(normalized)
