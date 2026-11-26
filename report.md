@@ -102,7 +102,7 @@
 | **Analytics & Telemetry** | Unified Total Productivity %, per-roadmap learning progress, habit streaks, yearly heatmap, and visual charts. | Chat (*"open analytics"*), `/analytics` |
 | **Live Web Research** | Rate-limited live web search with plain-English cited summaries (`research/search_engine.py`). | Ask any live/web question in chat or voice |
 | **ORBIT Live Agent & Discord** | Dedicated `/orbit` live agent modal + in-process Discord text, DM, and DAVE-encrypted two-way server voice channel bot (`!join`, `!stop`, `!leave`, `!notify here`). | `/orbit` or configure `AI_DISCORD_TOKEN` |
-| **Desktop Control Center** | One-window dark supervisor GUI (`Spidey Control Center.pyw`) to start/stop/restart Ollama, FastAPI, and Vite, monitor health, edit `.env`, stream logs, run `pytest`, and cleanly shut down process trees. | Double-click `Spidey Control Center.pyw` |
+| **Desktop Control Center** | One-window dark supervisor GUI (`ORBIT Control Center.pyw`) to start/stop/restart Ollama, FastAPI, and Vite, monitor health, edit `.env`, stream logs, run `pytest`, and cleanly shut down process trees. | Double-click `ORBIT Control Center.pyw` |
 
 ---
 

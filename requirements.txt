@@ -1,4 +1,4 @@
-# S.P.I.D.E.Y. Python Dependencies (pinned to the tested environment)
+# ORBIT Python Dependencies (pinned to the tested environment)
 #
 # Install inside a virtual environment:
 #   python -m venv .venv

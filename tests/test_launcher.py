@@ -1,23 +1,23 @@
-"""Unit tests for S.P.I.D.E.Y. Control Center / launcher helpers."""
+"""Unit tests for ORBIT Control Center / launcher helpers."""
 
 from pathlib import Path
 
-import spidey_launcher
+import orbit_launcher
 
 
 def test_load_and_save_env_config(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("# header comment\nOLLAMA_MODEL=qwen3.5:4b\nTTS_BACKEND=phonon\n", encoding="utf-8")
 
-    cfg = spidey_launcher.load_env_config(env_file)
+    cfg = orbit_launcher.load_env_config(env_file)
     assert cfg["OLLAMA_MODEL"] == "qwen3.5:4b"
     assert cfg["TTS_BACKEND"] == "phonon"
 
-    spidey_launcher.save_env_values(
+    orbit_launcher.save_env_values(
         {"OLLAMA_MODEL": "llama3.2:3b", "ORBIT_COACH_INTERVAL_MINUTES": "30"},
         env_path=env_file,
     )
-    updated = spidey_launcher.load_env_config(env_file)
+    updated = orbit_launcher.load_env_config(env_file)
     assert updated["OLLAMA_MODEL"] == "llama3.2:3b"
     assert updated["TTS_BACKEND"] == "phonon"
     assert updated["ORBIT_COACH_INTERVAL_MINUTES"] == "30"
@@ -29,7 +29,7 @@ def test_build_service_command_backend_and_frontend(tmp_path, monkeypatch):
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("", encoding="utf-8")
 
-    cmd, env, cwd = spidey_launcher.build_service_command(
+    cmd, env, cwd = orbit_launcher.build_service_command(
         "backend",
         env_cfg={"TTS_BACKEND": "sapi", "OLLAMA_MODEL": "qwen3.5:4b"},
         base_dir=tmp_path,
@@ -43,7 +43,7 @@ def test_build_service_command_backend_and_frontend(tmp_path, monkeypatch):
 
 def test_supervisor_emit_log_handles_all_channels():
     collected = []
-    sup = spidey_launcher.ServiceSupervisor(on_log=lambda svc, ln: collected.append((svc, ln)))
+    sup = orbit_launcher.ServiceSupervisor(on_log=lambda svc, ln: collected.append((svc, ln)))
     for channel in ("launcher", "ollama", "backend", "frontend", "custom"):
         sup._emit_log(channel, f"hello from {channel}")
     assert len(collected) == 5

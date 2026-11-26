@@ -1,4 +1,4 @@
-"""S.P.I.D.E.Y. Desktop Control Center — GUI front end to start, monitor, and manage all services."""
+"""ORBIT Desktop Control Center — GUI front end to start, monitor, and manage all services."""
 
 from __future__ import annotations
 
@@ -431,11 +431,11 @@ class ServiceSupervisor:
 
 
 def launch_gui() -> None:
-    """Start the Tkinter Swiss-editorial S.P.I.D.E.Y. Control Center."""
+    """Start the Tkinter Swiss-editorial ORBIT Control Center."""
     import tkinter as tk
     from tkinter import messagebox, scrolledtext, ttk
 
-    # Palette matching S.P.I.D.E.Y.'s Swiss-editorial dark theme
+    # Palette matching ORBIT's Swiss-editorial dark theme
     BG = "#0F0F0F"
     CARD = "#171717"
     CARD_BORDER = "#2A2A2A"
@@ -453,25 +453,27 @@ def launch_gui() -> None:
             import ctypes
 
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "spidey.orbit007.control.center.v2"
+                "orbit.control.center.v2"
             )
         except Exception:
             pass
 
     root = tk.Tk()
-    root.title("S.P.I.D.E.Y. // Control Center")
+    root.title("ORBIT // Control Center")
     root.geometry("1040x720")
     root.minsize(900, 620)
     root.configure(bg=BG)
 
-    ico_path = BASE_DIR / "spidey.ico"
+    ico_path = BASE_DIR / "orbit.ico"
+    if not ico_path.is_file():
+        ico_path = BASE_DIR / "spidey.ico"
     if ico_path.is_file():
         try:
             root.iconbitmap(default=str(ico_path))
         except Exception:
             pass
 
-    for candidate_png in (BASE_DIR / "Logo.png", BASE_DIR / "frontend" / "public" / "logo.png", BASE_DIR / "dist" / "icon.png"):
+    for candidate_png in (BASE_DIR / "logo.png", BASE_DIR / "frontend" / "public" / "logo.png", BASE_DIR / "dist" / "icon.png"):
         if candidate_png.is_file():
             try:
                 icon_img = tk.PhotoImage(file=str(candidate_png))
@@ -563,7 +565,7 @@ def launch_gui() -> None:
     title_box.pack(side="left")
     tk.Label(
         title_box,
-        text="S.P.I.D.E.Y.  //  CONTROL CENTER",
+        text="ORBIT  //  CONTROL CENTER",
         bg=BG,
         fg=TEXT,
         font=("Consolas", 15, "bold"),
@@ -601,7 +603,7 @@ def launch_gui() -> None:
         overrides = current_env_overrides()
 
         def _worker() -> None:
-            log_queue.put(("launcher", "Starting S.P.I.D.E.Y. stack..."))
+            log_queue.put(("launcher", "Starting ORBIT stack..."))
             supervisor.start_service("ollama", env_cfg=overrides)
             for _ in range(15):
                 if is_port_open(OLLAMA_HOST, OLLAMA_PORT):
@@ -966,13 +968,13 @@ def launch_gui() -> None:
         if running_managed:
             if messagebox.askyesno(
                 "Stop Managed Services?",
-                f"Stop running S.P.I.D.E.Y. services ({', '.join(running_managed)}) before closing?",
+                f"Stop running ORBIT services ({', '.join(running_managed)}) before closing?",
             ):
                 supervisor.stop_all()
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)
-    log_queue.put(("launcher", "S.P.I.D.E.Y. Control Center ready. Click '▶ START ALL' to launch."))
+    log_queue.put(("launcher", "ORBIT Control Center ready. Click '▶ START ALL' to launch."))
     drain_log_queue()
     poll_health_loop()
     root.mainloop()

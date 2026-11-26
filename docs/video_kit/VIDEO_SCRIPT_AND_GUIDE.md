@@ -19,7 +19,7 @@ Stop the backend server first so SQLite isn't locked, then run:
 *(When you finish recording, restore your real data anytime with `.\.venv\Scripts\python.exe scripts\seed_demo_data.py --restore`.)*
 
 ### Step B — Start ORBIT & Open Both Browser Tabs
-1. Start ORBIT via `Spidey Control Center.pyw` (`▶ START ALL`) or:
+1. Start ORBIT via `ORBIT Control Center.pyw` (`▶ START ALL`) or:
    - Terminal 1: `.\.venv\Scripts\python.exe app.py --server`
    - Terminal 2: `npm --prefix frontend run dev`
 2. Open Chrome in a clean profile (hide bookmarks bar with `Ctrl + Shift + B`):
@@ -119,7 +119,7 @@ Stop the backend server first so SQLite isn't locked, then run:
 ---
 
 ### Scene 8 — *(Optional 15s Bonus Cut)* Desktop Control Center & Discord (`4:10 – 4:25`)
-- **Visual:** Show a quick 5-second shot of `Spidey Control Center.pyw` running (`▶ START ALL` green health pills) — and if you have Discord set up, a 10-second clip typing `!join` and speaking to ORBIT in a server voice channel.
+- **Visual:** Show a quick 5-second shot of `ORBIT Control Center.pyw` running (`▶ START ALL` green health pills) — and if you have Discord set up, a 10-second clip typing `!join` and speaking to ORBIT in a server voice channel.
 - **Spoken Script:**
   > "Everything launches from one dark Desktop Control Center supervisor — and if you add a Discord token in `.env`, the exact same local brain and voice engine joins your Discord server for text chats and two-way encrypted voice calls."
 

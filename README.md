@@ -183,10 +183,10 @@ $env:SPIDEY_ALLOW_HUB = "1"
 
 ### Option A: Desktop Control Center GUI (Recommended)
 
-Double-click **`Spidey Control Center.pyw`** (or `start.bat`), or run:
+Double-click **`ORBIT Control Center.pyw`** (or `start.bat`), or run:
 
 ```powershell
-.\.venv\Scripts\pythonw.exe spidey_launcher.py
+.\.venv\Scripts\pythonw.exe orbit_launcher.py
 ```
 
 The Control Center lets you `▶ START ALL`, `■ STOP ALL`, `↻ RESTART`, monitor live health for Ollama (`11434`), FastAPI (`8000`), and Vite (`5173`), edit `.env`, view tabbed logs, and run `pytest`.
@@ -259,7 +259,7 @@ DISCORD_VOICE_SILENCE_SECONDS=0.95
 ```
 
 ### Step 4: Start ORBIT (Runs In-Process Automatically)
-- Whenever `AI_DISCORD_TOKEN` is set in `.env`, starting `python app.py --server` (or clicking `▶ START ALL` in `Spidey Control Center.pyw`) **automatically launches the Discord bot inside the FastAPI process**, sharing the loaded LLM, TTS engine, and SQLite database with zero extra VRAM/RAM overhead.
+- Whenever `AI_DISCORD_TOKEN` is set in `.env`, starting `python app.py --server` (or clicking `▶ START ALL` in `ORBIT Control Center.pyw`) **automatically launches the Discord bot inside the FastAPI process**, sharing the loaded LLM, TTS engine, and SQLite database with zero extra VRAM/RAM overhead.
 - *(Standalone mode)* If you want to run *only* the Discord bot without the web server, run:
   ```powershell
   .\.venv\Scripts\python.exe discord_bot.py

@@ -1,4 +1,4 @@
-"""Double-clickable Windows GUI entry point for S.P.I.D.E.Y. Control Center."""
+"""Double-clickable Windows GUI entry point for ORBIT Control Center."""
 
 from pathlib import Path
 import os
@@ -13,10 +13,10 @@ if str(ROOT_DIR) not in sys.path:
 if os.name == "nt" and ".venv" not in sys.executable.lower():
     venv_pythonw = ROOT_DIR / ".venv" / "Scripts" / "pythonw.exe"
     if venv_pythonw.is_file():
-        subprocess.Popen([str(venv_pythonw), str(ROOT_DIR / "spidey_launcher.py")], cwd=str(ROOT_DIR))
+        subprocess.Popen([str(venv_pythonw), str(ROOT_DIR / "orbit_launcher.py")], cwd=str(ROOT_DIR))
         raise SystemExit(0)
 
-from spidey_launcher import launch_gui  # noqa: E402
+from orbit_launcher import launch_gui  # noqa: E402
 
 if __name__ == "__main__":
     launch_gui()
