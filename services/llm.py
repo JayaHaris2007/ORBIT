@@ -354,7 +354,10 @@ _PRODUCTIVITY_CUE_RE = re.compile(
     r"(?<![a-z0-9])c\s*\+\s*\+(?![a-z0-9])"
     r"|(?<![a-z0-9])c\s*#(?![a-z0-9])"
     r"|\bc\s+plus\s+plus\b"
-    r"|\b(?:habits?|tasks?|to[\s-]?dos?|routine|schedule|productiv\w*|"
+    r"|\b(?:habits?|tasks?|to[\s-]?dos?|routine\w*|schedule\w*|timetable|time[\s-]?table|"
+    r"plan(?:ning|ned)?|next\s+day|tomorrow|today|my\s+day|prioriti[sz]\w*|organi[sz]\w*|"
+    r"reminders?|remind|alarms?|memor(?:y|ies)|notes?|"
+    r"analytics?|stats?|statistics|streaks?|xp|level|achievements?|productiv\w*|"
     r"improve\w*|discipline|goals?|learn(?:ed|t|ing)?|stud(?:y|ied|ying)|topics?|course\w*|"
     r"skills?|practice\w*|problem\w*|interview\w*|exercise\w*|quiz|algorithm\w*|"
     r"main\s+page|dashboard|page|app|nothing|there|pending|"
@@ -365,7 +368,7 @@ _PRODUCTIVITY_CUE_RE = re.compile(
 
 
 def _productivity_context(prompt: str, history: list[dict[str, Any]] | None = None) -> str:
-    """Current habits/tasks/learning, injected when the question (or recent turn) is about them."""
+    """Current habits/tasks/reminders/analytics/learning, injected when the question (or recent turn) is about them."""
     if prompt.startswith("Pick the single learning topic"):
         return ""
     recent_tail = " ".join(
@@ -389,9 +392,30 @@ def _productivity_context(prompt: str, history: list[dict[str, Any]] | None = No
     tasks = _app().memory_store.list_tasks(include_completed=False)
     if tasks:
         lines.append("Pending tasks:")
-        lines.extend(f"- #{t['id']} {t['title']} ({t['priority']})" for t in tasks[:8])
+        lines.extend(
+            f"- #{t['id']} {t['title']} ({t['priority']}"
+            + (f", due {t['due_at'][:10]}" if t.get("due_at") else "")
+            + ")"
+            for t in tasks[:10]
+        )
     else:
-        lines.append("Pending tasks: none.")
+        lines.append("Pending tasks: none right now.")
+    reminders = _app().memory_store.list_reminders(active_only=True)
+    if reminders:
+        lines.append("Active reminders:")
+        lines.extend(
+            f"- {r['text']} ({_app()._format_due_date(r['run_at'])}"
+            + (f", {r['recurrence']}" if r.get("recurrence") else "")
+            + ")"
+            for r in reminders[:6]
+        )
+    try:
+        stats = _app().memory_store.get_gamification()
+        xp = int(stats.get("xp") or 0)
+        streak = int(stats.get("global_streak") or 0)
+        lines.append(f"Gamification & analytics: Level {(xp // 100) + 1} ({xp} XP), {streak}-day global streak.")
+    except Exception:
+        pass
     lines.extend(_app()._learning_digest())
     if _app().learning_schema.is_initialized():
         try:

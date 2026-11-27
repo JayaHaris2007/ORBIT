@@ -614,9 +614,29 @@ def _find_reminder(reference: str) -> dict[str, Any]:
     return matches[0]
 
 
+_REMINDER_OTHER_DOMAIN_GUARD = re.compile(
+    r"\b(?:"
+    r"tasks?|to[\s-]?dos?|habits?|streaks?|routines?|"
+    r"memor(?:y|ies)|notes?|"
+    r"learn\w*|stud(?:y|ying|ied|ies)|topics?|roadmaps?|lessons?|modules?|"
+    r"analytics?|telemetry|overview|briefing|summary|stats?|statistics|"
+    r"xp|level|points?|achievements?|emails?|mails?|inbox|gmail"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_REMINDER_LIST_LEAD_RE = re.compile(
+    r"^(?:show|list|check|view|display|get|see|find|review|"
+    r"what(?:'s|\s+is|\s+are)?|which|tell\s+me|do\s+i\s+have|are\s+there|is\s+there|any|give\s+me)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_reminder_list_request(prompt: str) -> bool:
     normalized = _app()._normalize_command(prompt).lower()
     if not re.search(r"\b(?:reminders?|alarms?|timers?)\b", normalized):
+        return False
+    if _REMINDER_OTHER_DOMAIN_GUARD.search(normalized):
         return False
     if _app()._is_advice_question(normalized):
         return False
@@ -628,16 +648,11 @@ def _is_reminder_list_request(prompt: str) -> bool:
         return False
     if re.fullmatch(
         r"(?:(?:my|the|all|active|upcoming|pending|current)\s+)*"
-        r"(?:reminders?|alarms?|timers?)(?:\s+list)?",
+        r"(?:reminders?|alarms?|timers?)(?:\s+(?:list|status|today|for\s+today))?",
         normalized,
     ):
         return True
-    return bool(
-        re.search(
-            r"\b(?:show|list|check|what|which|tell me|do i have|any|upcoming|active|pending)\b",
-            normalized,
-        )
-    )
+    return bool(_REMINDER_LIST_LEAD_RE.match(normalized))
 
 
 def _format_reminder_list(reminders: list[dict[str, Any]]) -> str:

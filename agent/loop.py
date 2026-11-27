@@ -63,7 +63,10 @@ TOOL_TURN_SYSTEM_PROMPT = (
     "6. When the user asks for practice problems, DSA questions, or interview questions up to what they have "
     "learned so far, STRICTLY stay within their COMPLETED and IN PROGRESS roadmap topics — never give problems "
     "from NOT YET LEARNED topics (e.g., never suggest Arrays, Linked Lists, Trees, Graphs, or DP if those are not learned). "
-    "Never repeat the same item twice in a list, and if the user tells you to stop asking or says no, accept it briefly without repeating previous lists."
+    "Never repeat the same item twice in a list, and if the user tells you to stop asking or says no, accept it briefly without repeating previous lists.\n"
+    "7. When the user asks to plan their day/next day, prioritize, organize, or analyze their routine, combine their live "
+    "tasks, daily habits, active reminders, analytics, and next learning topics into a concrete, realistic plan (and if their "
+    "task list is currently empty, suggest 3-5 concrete tasks tailored to their habits and next learning topics, offering to add them)."
 )
 
 _HTTP_SESSIONS: dict[asyncio.AbstractEventLoop, aiohttp.ClientSession] = {}
@@ -456,22 +459,38 @@ def _build_initial_messages(
     # Keep recent history bounded so tool schemas + history never crowd out reply tokens
     recent_history = history[-6:] if len(history) > 6 else history
 
-    # Inject Hybrid Code RAG + exact roadmap Completed/Not-Yet-Learned context for code/learning/DSA turns
-    schema_init = getattr(deps, "learning_schema_initialized", None)
-    if callable(schema_init) and schema_init():
-        try:
-            from learning import code_rag
+    # Inject live workspace snapshot (tasks, habits, reminders, analytics, learning) for planning/advice/analytics prompts
+    try:
+        import app as _app_mod
 
-            rag_ctx = code_rag.build_rag_prompt_context(
-                prompt,
-                embed=getattr(deps.memory_store, "embed", None),
-                limit=3,
-                history=recent_history,
+        norm_prompt = _app_mod._normalize_command(prompt).lower()
+        is_planning_or_multi = bool(_app_mod._is_advice_question(norm_prompt)) or bool(
+            re.search(
+                r"\b(?:plan\w*|next\s+day|tomorrow|analytics?|stats?|overview|routine|timetable|schedule)\b",
+                norm_prompt,
+                re.IGNORECASE,
             )
-            if rag_ctx:
-                system_text += f"\n\n{rag_ctx}"
-        except Exception:
-            pass
+        )
+        if is_planning_or_multi:
+            workspace_snap = _app_mod._productivity_context(prompt, history=recent_history)
+            if workspace_snap:
+                system_text += f"\n\nLive workspace snapshot:\n{workspace_snap}"
+        else:
+            # Inject Hybrid Code RAG + exact roadmap Completed/Not-Yet-Learned context for code/learning/DSA turns
+            schema_init = getattr(deps, "learning_schema_initialized", None)
+            if callable(schema_init) and schema_init():
+                from learning import code_rag
+
+                rag_ctx = code_rag.build_rag_prompt_context(
+                    prompt,
+                    embed=getattr(deps.memory_store, "embed", None),
+                    limit=3,
+                    history=recent_history,
+                )
+                if rag_ctx:
+                    system_text += f"\n\n{rag_ctx}"
+    except Exception:
+        pass
 
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_text}]
 

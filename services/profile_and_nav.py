@@ -332,6 +332,8 @@ def _profile_topic(normalized: str) -> str | None:
     # Never hijack actionable Tasks, Habits, Reminders, Learning, Analytics, or Settings queries.
     if _NON_PROFILE_DOMAIN_GUARD.search(normalized):
         return None
+    if _app()._is_advice_question(normalized):
+        return None
     for label, words in _PROFILE_TOPIC_WORDS:
         if any(re.search(rf"\b{re.escape(word)}\b", normalized) for word in words):
             return label

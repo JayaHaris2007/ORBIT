@@ -673,17 +673,31 @@ def _parse_task_reopen(prompt: str) -> str | None:
 
 _ADVICE_PATTERN = re.compile(
     r"\b(?:what\s+(?:new|else|other|should|can|could|would)|"
-    r"should\s+i|how\s+(?:can|do|should|could|to)|"
+    r"should\s+i|how\s+(?:can|do|should|could|to|well)|"
     r"suggest\w*|recommend\w*|advice|tips?|ideas?|improv\w+|better|"
     r"think\s+about|opinion|why|help\s+me|ways?\s+to|"
-    r"good\s+habits?|bad\s+habits?)\b",
+    r"good\s+habits?|bad\s+habits?|"
+    r"(?<!un)plan(?:ning|ned)?|timetable|time[\s-]?table|time[\s-]?block\w*|"
+    r"schedule\s+(?:my|the|a)\s+(?:day|week|morning|evening|tomorrow|next\s+day|tasks?|habits?|study)|"
+    r"prioriti[sz]\w*|organi[sz]\w*|strateg\w*|break\s+down|step[\s-]by[\s-]step|"
+    r"analy[sz]\w*|evaluat\w*|compar\w*|explain|motiv\w*|stay\s+consistent|"
+    r"balance|optimi[sz]\w*|design|draft|generate|brainstorm|"
+    r"(?:make|build|create|prepare|give\s+me)\s+(?:a\s+|my\s+)?(?:day\s+|daily\s+|weekly\s+|study\s+)?(?:plan|schedule|routine|timetable)|"
+    r"next\s+day|my\s+day\b)\b",
     re.IGNORECASE,
 )
 
 
 def _is_advice_question(normalized_prompt: str) -> bool:
-    """Open-ended questions belong to the LLM, not the list handlers."""
+    """Open-ended planning, analysis, and advice questions belong to the LLM, not the list handlers."""
     return bool(_ADVICE_PATTERN.search(normalized_prompt))
+
+
+_LIST_QUERY_LEAD_RE = re.compile(
+    r"^(?:show|list|check|view|display|get|see|find|review|"
+    r"what(?:'s|\s+is|\s+are)?|which|tell\s+me|do\s+i\s+have|are\s+there|is\s+there|any|give\s+me)\b",
+    re.IGNORECASE,
+)
 
 
 _OTHER_DOMAIN_GUARD = re.compile(
@@ -695,8 +709,22 @@ _OTHER_DOMAIN_GUARD = re.compile(
     r"code|coded|coding|folders?|links?|"
     r"analytics?|telemetry|overview|briefing|summary|stats?|statistics|"
     r"settings?|preferences?|theme|profile|"
-    r"xp|level|points?|achievements?|"
+    r"xp|level|points?|achievements?|emails?|mails?|inbox|gmail|"
     r"focus\s+more|improve|average|progress"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_HABIT_OTHER_DOMAIN_GUARD = re.compile(
+    r"\b(?:"
+    r"tasks?|to[\s-]?dos?|"
+    r"reminders?|remind|alarms?|timers?|"
+    r"memor(?:y|ies)|notes?|"
+    r"learn\w*|stud(?:y|ying|ied|ies)|topics?|roadmaps?|lessons?|modules?|courses?|subjects?|"
+    r"code|coded|coding|folders?|links?|"
+    r"analytics?|telemetry|overview|briefing|summary|stats?|statistics|"
+    r"settings?|preferences?|theme|profile|"
+    r"xp|level|points?|achievements?|emails?|mails?|inbox|gmail"
     r")\b",
     re.IGNORECASE,
 )
@@ -740,12 +768,16 @@ def _is_task_list_request(prompt: str) -> bool:
 
     # Bare / short task queries: "tasks", "my tasks", "todos", "pending tasks", "tasks today"
     if re.fullmatch(
-        r"(?:(?:my|the|all|today'?s|daily|current)\s+)*"
+        r"(?:(?:my|the|all|today'?s|daily|current|pending|open|remaining|unfinished|incomplete|completed|done|finished)\s+)*"
         r"(?:tasks?|to[\s-]?dos?|task\s+list|to[\s-]?do\s+list)"
-        r"(?:\s+(?:today|for\s+today|status|list))?",
+        r"(?:\s+(?:today|for\s+today|status|list|pending|open|remaining|left|to\s+complete|to\s+do|completed|done))?",
         normalized_prompt,
     ):
         return True
+
+    # Longer sentences MUST begin with an explicit list/question lead (never hijack planning/conversational prompts!)
+    if not _LIST_QUERY_LEAD_RE.match(normalized_prompt):
+        return False
 
     task_reference = re.search(
         r"\b(?:tasks?|to[\s-]?dos?|things to do)\b",
@@ -757,31 +789,21 @@ def _is_task_list_request(prompt: str) -> bool:
         if re.search(r"\bto\s+(?!do\b|complete\b|finish\b)[a-z]+\b", normalized_prompt):
             return False
         return bool(
-            re.search(r"\b(?:what|which|show|list|check|tell me|any)\b", normalized_prompt)
-            and re.search(
+            re.search(
                 r"\b(?:pending|unfinished|remaining|left|to do|need to complete|need to do)\b",
                 normalized_prompt,
             )
         )
 
-    list_intent = re.search(
-        r"\b(?:show|list|check|review|see|find|what|which|tell me|"
-        r"do i have|are there|any)\b",
-        normalized_prompt,
-    )
-    pending_intent = re.search(
-        r"\b(?:pending|incomplete|unfinished|remaining|left|to do|"
-        r"need to do|still need to do|need to complete|to complete|"
-        r"need to finish|open)\b",
-        normalized_prompt,
-    )
-    return bool(list_intent or pending_intent)
+    return True
 
 
 def _is_habit_list_request(prompt: str) -> bool:
     normalized_prompt = _app()._normalize_command(prompt).lower()
 
     if not re.search(r"\bhabits?\b", normalized_prompt):
+        return False
+    if _HABIT_OTHER_DOMAIN_GUARD.search(normalized_prompt):
         return False
     if _app()._is_advice_question(normalized_prompt):
         return False
@@ -816,24 +838,14 @@ def _is_habit_list_request(prompt: str) -> bool:
 
     # Bare / short habit queries: "habits", "my habits", "habits today", "daily habits", "habit status"
     if re.fullmatch(
-        r"(?:(?:my|the|all|today'?s|daily|current)\s+)*"
-        r"habits?(?:\s+(?:today|for\s+today|status|list|streaks?))?",
+        r"(?:(?:my|the|all|today'?s|daily|current|pending|open|remaining|unfinished|incomplete)\s+)*"
+        r"habits?(?:\s+(?:today|for\s+today|status|list|streaks?|pending|remaining|left|to\s+complete|to\s+do))?",
         normalized_prompt,
     ):
         return True
 
-    list_intent = re.search(
-        r"\b(?:check|show|list|review|see|tell me|find|what|which|"
-        r"do i have|are there|any|status)\b",
-        normalized_prompt,
-    )
-    incomplete_intent = re.search(
-        r"\b(?:pending|incomplete|unfinished|remaining|left|not complete|"
-        r"not completed|still not complete|still not completed|to complete|"
-        r"to do|need to complete|need to finish)\b",
-        normalized_prompt,
-    )
-    return bool(list_intent or incomplete_intent)
+    # Longer sentences MUST begin with an explicit list/question lead
+    return bool(_LIST_QUERY_LEAD_RE.match(normalized_prompt))
 
 
 def _is_habit_follow_up(prompt: str, previous_messages: list[dict[str, str]]) -> bool:

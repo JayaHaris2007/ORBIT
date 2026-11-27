@@ -194,3 +194,50 @@ def test_stop_asking_and_short_no_dismiss_pending_code_suggestions(tmp_path):
     assert provider == "local-learning"
     assert "Functions" in text
     assert code_rag.list_code_suggestions(roadmap_id=rm_id, state="pending") == []
+
+
+def test_planning_advice_and_multidomain_prompts_not_hijacked_by_keyword_lists(tmp_path):
+    _setup_cpp_roadmap_with_loops(tmp_path)
+    chat_id = app.memory_store.create_chat()["id"]
+    app.memory_store.add_memory("My goal is to master C++ and DSA this semester")
+    app.memory_store.create_habit("Morning DSA", "Code", 1)
+    app.memory_store.create_reminder("Revise loops", "2026-11-27T08:00:00+05:30", None, chat_id)
+
+    # 1. Planning, organizing, analyzing, and multi-domain prompts must reach the LLM (return None locally)
+    llm_prompts = [
+        "plan my next day and task to complete",
+        "plan my habits for tomorrow",
+        "organize my pending tasks and habits",
+        "show my tasks and habits",
+        "check my habits and reminders",
+        "show my tasks and reminders",
+        "prioritize my open tasks for tomorrow",
+        "break down my pending task into steps",
+        "make a timetable for my remaining tasks",
+        "analyze my habits and learning progress",
+        "help me plan my goals",
+    ]
+    for prompt in llm_prompts:
+        res = app._handle_local_command(prompt, chat_id)
+        assert res is None, f"Prompt {prompt!r} was wrongly hijacked by local handler: {res}"
+
+    # 2. Explicit single-domain list commands still work deterministically
+    assert app._handle_local_command("show my pending tasks", chat_id)[1] == "local-task-manager"
+    assert app._handle_local_command("pending tasks", chat_id)[1] == "local-task-manager"
+    assert app._handle_local_command("tasks", chat_id)[1] == "local-task-manager"
+    assert app._handle_local_command("check my habits to complete", chat_id)[1] == "local-habit-manager"
+    assert app._handle_local_command("pending habits", chat_id)[1] == "local-habit-manager"
+    assert app._handle_local_command("show reminders", chat_id)[1] == "local-scheduler"
+    assert app._handle_local_command("upcoming reminders", chat_id)[1] == "local-scheduler"
+    assert app._handle_local_command("show my notes", chat_id)[1] == "local-memory"
+
+    # 3. Planning prompts inject full live workspace snapshot (habits, tasks, reminders, analytics, learning)
+    msgs = _build_initial_messages("plan my next day and task to complete", [], [], app.agent_deps)
+    sys_prompt = msgs[0]["content"]
+    assert "Live workspace snapshot:" in sys_prompt
+    assert "Morning DSA" in sys_prompt
+    assert "Pending tasks:" in sys_prompt
+    assert "Revise loops" in sys_prompt
+    assert "Gamification & analytics:" in sys_prompt
+    assert "COMPLETED (user HAS learned ONLY these)" in sys_prompt
+    assert "NOT YET LEARNED" in sys_prompt
